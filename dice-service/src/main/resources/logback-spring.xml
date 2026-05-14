@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- stdout appender: MDC attributes (log_category, log_type, …) are included -->
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} [category=%X{log_category:-} type=%X{log_type:-} user=%X{user_id:-} req=%X{request_id:-}] - %msg%n%ex{full}</pattern>
+        </encoder>
+    </appender>
+
+    <!-- root: INFO for everything except the dice service itself -->
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+
+    <!-- DEBUG level for dice service so all 4 levels are emitted -->
+    <logger name="com.example.dice" level="DEBUG" additivity="false">
+        <appender-ref ref="STDOUT"/>
+    </logger>
+
+</configuration>

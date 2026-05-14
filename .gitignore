@@ -1,0 +1,25 @@
+# Maven
+dice-service/target/
+dice-service/.mvn/wrapper/maven-wrapper.jar
+!dice-service/.mvn/wrapper/maven-wrapper.properties
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Spring Boot
+dice-service/src/main/resources/application-local.yaml
+dice-service/src/main/resources/application-local.properties
+
+# Docker
+dice-service/.dockerignore
+
+# Logs
+*.log
