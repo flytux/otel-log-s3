@@ -31,7 +31,7 @@ audit-log/
 
 ### ClickHouse 배포
 ```bash
-kubectl apply -f clickhouse-deployment.yaml
+kubectl apply -f clickhouse.yaml
 kubectl rollout status deployment/clickhouse -n monitoring
 ```
 
