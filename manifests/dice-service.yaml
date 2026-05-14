@@ -29,7 +29,7 @@ spec:
       containers:
         - name: dice-service
           # ── Replace with your actual image ──────────────────────────────────
-          image: <YOUR_REGISTRY>/dice-service:latest
+          image: flytux/dice:otel
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
