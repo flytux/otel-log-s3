@@ -1,0 +1,173 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-keeper-config
+  namespace: monitoring
+data:
+  keeper.xml: |
+    <clickhouse>
+      <!-- ClickHouse 내장 Keeper (Zookeeper 대체) 설정 -->
+      <keeper_server>
+        <tcp_port>9181</tcp_port>
+        <server_id>1</server_id>
+        <log_storage_path>/var/lib/clickhouse/coordination/log</log_storage_path>
+        <snapshot_storage_path>/var/lib/clickhouse/coordination/snapshots</snapshot_storage_path>
+        <coordination_settings>
+          <operation_timeout_ms>10000</operation_timeout_ms>
+          <session_timeout_ms>30000</session_timeout_ms>
+          <raft_logs_level>warning</raft_logs_level>
+        </coordination_settings>
+        <raft_configuration>
+          <server>
+            <id>1</id>
+            <hostname>localhost</hostname>
+            <port>9234</port>
+          </server>
+        </raft_configuration>
+      </keeper_server>
+      <!-- ClickHouse가 Keeper에 연결하도록 설정 -->
+      <zookeeper>
+        <node>
+          <host>localhost</host>
+          <port>9181</port>
+        </node>
+      </zookeeper>
+    </clickhouse>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-minio-config
+  namespace: monitoring
+data:
+  minio.xml: |
+    <clickhouse>
+      <!-- MinIO S3 전역 설정 -->
+      <s3>
+        <use_environment_credentials>0</use_environment_credentials>
+      </s3>
+
+      <!-- Named Collection: 쿼리에서 자격증명 없이 재사용 -->
+      <named_collections>
+        <minio>
+          <url>http://minio-service.monitoring:9000/</url>
+          <access_key_id>minioadmin</access_key_id>
+          <secret_access_key>minioadmin</secret_access_key>
+          <use_environment_credentials>0</use_environment_credentials>
+        </minio>
+        <minio_audit>
+          <url>http://minio-service.monitoring:9000/audit-log/audit/**</url>
+          <access_key_id>minioadmin</access_key_id>
+          <secret_access_key>minioadmin</secret_access_key>
+          <format>JSONAsString</format>
+          <use_environment_credentials>0</use_environment_credentials>
+        </minio_audit>
+      </named_collections>
+    </clickhouse>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-users-config
+  namespace: monitoring
+data:
+  users.xml: |
+    <clickhouse>
+      <users>
+        <default>
+          <named_collection_control>1</named_collection_control>
+          <show_named_collections>1</show_named_collections>
+          <show_named_collections_secrets>1</show_named_collections_secrets>
+          <access_management>0</access_management>
+        </default>
+      </users>
+    </clickhouse>
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: clickhouse-pvc
+  namespace: monitoring
+spec:
+  storageClassName: local-path
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clickhouse
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clickhouse
+  template:
+    metadata:
+      labels:
+        app: clickhouse
+    spec:
+      containers:
+      - name: clickhouse
+        image: clickhouse/clickhouse-server:latest
+        ports:
+        - containerPort: 8123
+          name: http
+        - containerPort: 9000
+          name: native
+        - containerPort: 9181
+          name: keeper
+        - containerPort: 9234
+          name: keeper-raft
+        env:
+        - name: CLICKHOUSE_USER
+          value: "default"
+        - name: CLICKHOUSE_PASSWORD
+          value: "clickhouse"
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/clickhouse
+        - name: keeper-config
+          mountPath: /etc/clickhouse-server/config.d/keeper.xml
+          subPath: keeper.xml
+        - name: minio-config
+          mountPath: /etc/clickhouse-server/config.d/minio.xml
+          subPath: minio.xml
+        - name: users-config
+          mountPath: /etc/clickhouse-server/users.d/users.xml
+          subPath: users.xml
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: clickhouse-pvc
+      - name: keeper-config
+        configMap:
+          name: clickhouse-keeper-config
+      - name: minio-config
+        configMap:
+          name: clickhouse-minio-config
+      - name: users-config
+        configMap:
+          name: clickhouse-users-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse-service
+  namespace: monitoring
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+    - name: native
+      port: 9000
+      targetPort: 9000
+  selector:
+    app: clickhouse
+

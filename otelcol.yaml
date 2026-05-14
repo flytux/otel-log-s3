@@ -1,0 +1,134 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+data:
+  config.yaml: |-
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: 'otel-collector-internal'
+              scrape_interval: 10s
+              static_configs:
+                - targets: ['0.0.0.0:8888']
+    processors:
+      batch:
+      filter/audit:
+        error_mode: ignore
+        logs:
+          log_record:
+            - 'attributes["log_category"] != "audit"'
+    exporters:
+      debug:
+        verbosity: detailed
+      awss3/minio:
+        s3uploader:
+          region: us-east-1
+          s3_bucket: audit-log
+          s3_prefix: audit
+          endpoint: http://minio-service.monitoring:9000
+          s3_force_path_style: true
+    service:
+      telemetry:
+        logs:
+          level: info
+      pipelines:
+        logs/audit:
+          receivers: [otlp]
+          processors: [filter/audit, batch]
+          exporters: [awss3/minio]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      containers:
+      - name: otel-collector
+        image: flytux/otelcol-contrib:v0.152
+        env:
+        - name: NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: AWS_ACCESS_KEY_ID
+          value: "minioadmin"
+        - name: AWS_SECRET_ACCESS_KEY
+          value: "minioadmin"
+        args: ["--config=/etc/otelcol/config.yaml"]
+        ports:
+        - containerPort: 4317
+        - containerPort: 4318
+        - containerPort: 55679
+        - containerPort: 8888
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/otelcol/config.yaml
+          subPath: config.yaml
+      volumes:
+      - name: config-volume
+        configMap:
+          name: otel-collector-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector-service
+spec:
+  selector:
+    app: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+    - name: zpages
+      port: 55679
+      targetPort: 55679
+    - name: metrics
+      port: 8888
+      targetPort: 8888
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: otel-collector-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: otelcol.node-01
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: otel-collector-service
+            port:
+              number: 55679
