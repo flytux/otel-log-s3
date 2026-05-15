@@ -305,7 +305,219 @@ DROP TABLE IF EXISTS audit_logs;
 
 ---
 
-## 8. 트러블슈팅
+## 9. Grafana ClickHouse 데이터소스 설정
+
+### 9-1. 플러그인 설치
+
+Grafana UI → **Administration > Plugins** → `clickhouse` 검색 → **Grafana ClickHouse datasource** 설치
+
+또는 grafana.ini / provisioning으로 설치:
+```bash
+grafana-cli plugins install grafana-clickhouse-datasource
+```
+
+### 9-2. 데이터소스 추가
+
+**Configuration > Data Sources > Add data source > ClickHouse**
+
+| 항목 | 값 |
+|---|---|
+| Server address | `clickhouse-service.monitoring` |
+| Server port | `8123` |
+| Protocol | `HTTP` |
+| Username | `default` |
+| Password | `clickhouse` |
+| Default database | `default` |
+
+**Save & Test** 클릭 후 `Data source connected` 확인.
+
+---
+
+## 10. Grafana 패널 쿼리
+
+> Grafana ClickHouse 플러그인에서 `$__fromTime` / `$__toTime` 매크로는 선택한 시간 범위를 `DateTime64`로 자동 치환합니다.
+
+### 10-1. 로그 목록 (Logs / Table 패널)
+
+```sql
+SELECT
+    observed_time                       AS time,
+    severity_text,
+    attributes['log_category']          AS log_category,
+    attributes['log_type']              AS log_type,
+    attributes['user_id']               AS user_id,
+    attributes['request_id']            AS request_id,
+    body
+FROM audit_logs
+WHERE observed_time >= $__fromTime
+  AND observed_time <= $__toTime
+ORDER BY observed_time DESC
+LIMIT 200
+```
+
+### 10-2. 시계열 집계 (Time Series 패널)
+
+```sql
+SELECT
+    toStartOfMinute(observed_time)  AS time,
+    attributes['log_category']      AS category,
+    attributes['log_type']          AS log_type,
+    count()                         AS cnt
+FROM audit_logs
+WHERE observed_time BETWEEN $__fromTime AND $__toTime
+GROUP BY time, category, log_type
+ORDER BY time
+```
+
+### 10-3. 로그 레벨 분포 (Pie / Bar 패널)
+
+```sql
+SELECT
+    severity_text,
+    attributes['log_category']  AS category,
+    count()                     AS cnt
+FROM audit_logs
+WHERE observed_time BETWEEN $__fromTime AND $__toTime
+GROUP BY severity_text, category
+ORDER BY cnt DESC
+```
+
+### 10-4. audit/auth 로그 — 인증 결과 조회
+
+```sql
+SELECT
+    observed_time,
+    severity_text,
+    attributes['user_id']      AS user_id,
+    attributes['auth_result']  AS auth_result,
+    attributes['auth_method']  AS auth_method,
+    attributes['ip_address']   AS ip_address,
+    body
+FROM audit_logs
+WHERE observed_time BETWEEN $__fromTime AND $__toTime
+  AND attributes['log_category'] = 'audit'
+  AND attributes['log_type']     = 'auth'
+ORDER BY observed_time DESC
+LIMIT 100
+```
+
+### 10-5. audit/personalinfo 로그 — 개인정보 접근 이력
+
+```sql
+SELECT
+    observed_time,
+    severity_text,
+    attributes['user_id']       AS requestor,
+    attributes['data_type']     AS data_type,
+    attributes['operation']     AS operation,
+    attributes['data_subject']  AS data_subject,
+    body
+FROM audit_logs
+WHERE observed_time BETWEEN $__fromTime AND $__toTime
+  AND attributes['log_category'] = 'audit'
+  AND attributes['log_type']     = 'personalinfo'
+ORDER BY observed_time DESC
+LIMIT 100
+```
+
+### 10-6. svc/http — HTTP 요청 로그
+
+```sql
+SELECT
+    observed_time,
+    severity_text,
+    attributes['http_method']      AS method,
+    attributes['http_path']        AS path,
+    attributes['http_status_code'] AS status,
+    attributes['response_time_ms'] AS response_ms,
+    attributes['user_id']          AS user_id,
+    body
+FROM audit_logs
+WHERE observed_time BETWEEN $__fromTime AND $__toTime
+  AND attributes['log_category'] = 'svc'
+  AND attributes['log_type']     = 'http'
+ORDER BY observed_time DESC
+LIMIT 100
+```
+
+### 10-7. svc/db — DB 쿼리 로그
+
+```sql
+SELECT
+    observed_time,
+    severity_text,
+    attributes['db_operation']   AS operation,
+    attributes['db_table']       AS db_table,
+    attributes['db_duration_ms'] AS duration_ms,
+    attributes['db_rows']        AS rows,
+    attributes['user_id']        AS user_id,
+    body
+FROM audit_logs
+WHERE observed_time BETWEEN $__fromTime AND $__toTime
+  AND attributes['log_category'] = 'svc'
+  AND attributes['log_type']     = 'db'
+ORDER BY observed_time DESC
+LIMIT 100
+```
+
+### 10-8. ERROR 로그 + 스택 트레이스
+
+```sql
+SELECT
+    observed_time,
+    attributes['log_category']  AS category,
+    attributes['log_type']      AS log_type,
+    attributes['user_id']       AS user_id,
+    body
+FROM audit_logs
+WHERE observed_time BETWEEN $__fromTime AND $__toTime
+  AND severity_text = 'ERROR'
+ORDER BY observed_time DESC
+LIMIT 50
+```
+
+### 10-9. 사용자별 감사 활동 집계
+
+```sql
+SELECT
+    attributes['user_id']      AS user_id,
+    attributes['log_type']     AS log_type,
+    attributes['auth_result']  AS auth_result,
+    count()                    AS cnt
+FROM audit_logs
+WHERE observed_time BETWEEN $__fromTime AND $__toTime
+  AND attributes['log_category'] = 'audit'
+GROUP BY user_id, log_type, auth_result
+ORDER BY cnt DESC
+```
+
+---
+
+## 11. Grafana 대시보드 변수 (Variables)
+
+대시보드 **Settings > Variables** 에서 아래 변수를 추가하면 패널 쿼리를 동적으로 필터링할 수 있습니다.
+
+| 변수명 | Query |
+|---|---|
+| `log_category` | `SELECT DISTINCT attributes['log_category'] FROM audit_logs WHERE attributes['log_category'] != ''` |
+| `log_type` | `SELECT DISTINCT attributes['log_type'] FROM audit_logs WHERE attributes['log_type'] != ''` |
+| `severity` | `SELECT DISTINCT severity_text FROM audit_logs WHERE severity_text != ''` |
+| `user_id` | `SELECT DISTINCT attributes['user_id'] FROM audit_logs WHERE attributes['user_id'] != '' LIMIT 100` |
+
+변수 적용 예:
+```sql
+SELECT observed_time, severity_text, attributes['user_id'] AS user_id, body
+FROM audit_logs
+WHERE observed_time BETWEEN $__fromTime AND $__toTime
+  AND attributes['log_category'] = '${log_category}'
+  AND attributes['log_type']     = '${log_type}'
+  AND severity_text              = '${severity}'
+ORDER BY observed_time DESC
+```
+
+---
+
+## 12. 트러블슈팅
 
 | 증상 | 원인 | 해결 |
 |---|---|---|

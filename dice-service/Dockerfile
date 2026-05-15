@@ -43,7 +43,7 @@ ENV OTEL_SERVICE_NAME=dice-service \
     OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
     OTEL_LOGS_EXPORTER=otlp \
     OTEL_METRICS_EXPORTER=none \
-    OTEL_TRACES_EXPORTER=otlp
+    OTEL_TRACES_EXPORTER=none
 
 ENTRYPOINT ["java", \
     "-javaagent:opentelemetry-javaagent.jar", \

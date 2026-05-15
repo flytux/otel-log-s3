@@ -25,6 +25,15 @@ data:
         logs:
           log_record:
             - 'attributes["log_category"] != "audit"'
+      transform/fix_time:
+        log_statements:
+          - context: log
+            statements:
+              # observed_time_unix_nano 가 0(미설정)이면 time_unix_nano 로 채움
+              - set(observed_time_unix_nano, time_unix_nano) where observed_time_unix_nano == 0
+              # time_unix_nano 도 0이면 수집 시각(Now)으로 채움
+              - set(time_unix_nano, Now()) where time_unix_nano == 0
+              - set(observed_time_unix_nano, time_unix_nano) where observed_time_unix_nano == 0
     exporters:
       debug:
         verbosity: detailed
@@ -42,8 +51,8 @@ data:
       pipelines:
         logs/audit:
           receivers: [otlp]
-          processors: [filter/audit, batch]
-          exporters: [awss3/minio]
+          processors: [transform/fix_time, filter/audit, batch]
+          exporters: [awss3/minio, debug]
 ---
 apiVersion: apps/v1
 kind: Deployment
