@@ -1,13 +1,7 @@
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: monitoring
----
-apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: minio-pvc
-  namespace: monitoring
 spec:
   storageClassName: local-path
   accessModes:
@@ -20,7 +14,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: minio
-  namespace: monitoring
 spec:
   replicas: 1
   selector:
@@ -61,7 +54,6 @@ apiVersion: v1
 kind: Service
 metadata:
   name: minio-service
-  namespace: monitoring
 spec:
   type: ClusterIP
   ports:
@@ -78,7 +70,6 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: minio-ingress
-  namespace: monitoring
 spec:
   ingressClassName: nginx
   rules:
@@ -92,3 +83,47 @@ spec:
             name: minio-service
             port:
               number: 9001
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-bucket-bootstrap
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: mc
+        image: minio/mc:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          until mc alias set local http://minio-service:9000 minioadmin minioadmin; do
+            echo "waiting for minio..."
+            sleep 2
+          done
+          mc mb --ignore-existing local/otel-logs
+          mc mb --ignore-existing local/otel-traces
+          mc mb --ignore-existing local/otel-metrics
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-hyperdx-sessions-bootstrap
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: mc
+        image: minio/mc:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          until mc alias set local http://minio-service:9000 minioadmin minioadmin; do
+            echo "waiting for minio..."
+            sleep 2
+          done
+          mc mb --ignore-existing local/hyperdx-sessions

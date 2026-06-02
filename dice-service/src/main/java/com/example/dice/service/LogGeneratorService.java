@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 import java.util.Random;
 import java.util.UUID;
 
@@ -114,6 +115,8 @@ public class LogGeneratorService {
     // -------------------------------------------------------------------------
 
     private void generateSingleLog(String player, int diceResult) {
+        Map<String, String> previousContext = MDC.getCopyOfContextMap();
+
         String category = CATEGORIES[random.nextInt(CATEGORIES.length)];
         String[] types  = TYPES.get(category);
         String type     = types[random.nextInt(types.length)];
@@ -133,7 +136,11 @@ public class LogGeneratorService {
         try {
             emitLog(category, type, userId, diceResult);
         } finally {
-            MDC.clear();
+            if (previousContext == null || previousContext.isEmpty()) {
+                MDC.clear();
+            } else {
+                MDC.setContextMap(new HashMap<>(previousContext));
+            }
         }
     }
 

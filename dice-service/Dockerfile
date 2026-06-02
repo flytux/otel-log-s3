@@ -34,6 +34,8 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends bash curl \
 
 COPY --from=agent-downloader /opentelemetry-javaagent.jar opentelemetry-javaagent.jar
 COPY --from=builder /app/target/*.jar app.jar
+COPY click.tar .
+COPY dice-s3.tar .
 
 EXPOSE 8080
 
@@ -43,7 +45,8 @@ ENV OTEL_SERVICE_NAME=dice-service \
     OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
     OTEL_LOGS_EXPORTER=otlp \
     OTEL_METRICS_EXPORTER=none \
-    OTEL_TRACES_EXPORTER=none
+    OTEL_TRACES_EXPORTER=none \
+    OTEL_INSTRUMENTATION_LOGBACK_APPENDER_EXPERIMENTAL_CAPTURE_MDC_ATTRIBUTES=*
 
 ENTRYPOINT ["java", \
     "-javaagent:opentelemetry-javaagent.jar", \

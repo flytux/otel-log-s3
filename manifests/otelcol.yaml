@@ -11,6 +11,13 @@ data:
             endpoint: 0.0.0.0:4317
           http:
             endpoint: 0.0.0.0:4318
+            cors:
+              allowed_origins:
+                - http://dice.node-01
+                - http://hyperdx.node-01
+              allowed_headers:
+                - "*"
+              max_age: 7200
       prometheus:
         config:
           scrape_configs:
@@ -20,11 +27,6 @@ data:
                 - targets: ['0.0.0.0:8888']
     processors:
       batch:
-      filter/audit:
-        error_mode: ignore
-        logs:
-          log_record:
-            - 'attributes["log_category"] != "audit"'
       transform/fix_time:
         log_statements:
           - context: log
@@ -34,25 +36,62 @@ data:
               # time_unix_nano 도 0이면 수집 시각(Now)으로 채움
               - set(time_unix_nano, Now()) where time_unix_nano == 0
               - set(observed_time_unix_nano, time_unix_nano) where observed_time_unix_nano == 0
+      filter/session_logs:
+        error_mode: ignore
+        logs:
+          log_record:
+            - resource.attributes["service.name"] == nil
+            - resource.attributes["service.name"] != "dice-web"
     exporters:
-      debug:
-        verbosity: detailed
-      awss3/minio:
+      awss3/logs:
         s3uploader:
           region: us-east-1
-          s3_bucket: audit-log
-          s3_prefix: audit
-          endpoint: http://minio-service.monitoring:9000
+          s3_bucket: otel-logs
+          s3_prefix: logs
+          endpoint: http://minio-service:9000
+          s3_force_path_style: true
+      awss3/traces:
+        s3uploader:
+          region: us-east-1
+          s3_bucket: otel-traces
+          s3_prefix: traces
+          endpoint: http://minio-service:9000
+          s3_force_path_style: true
+      awss3/metrics:
+        s3uploader:
+          region: us-east-1
+          s3_bucket: otel-metrics
+          s3_prefix: metrics
+          endpoint: http://minio-service:9000
+          s3_force_path_style: true
+      awss3/sessions:
+        s3uploader:
+          region: us-east-1
+          s3_bucket: hyperdx-sessions
+          s3_prefix: sessions
+          endpoint: http://minio-service:9000
           s3_force_path_style: true
     service:
       telemetry:
         logs:
           level: info
       pipelines:
-        logs/audit:
+        logs:
           receivers: [otlp]
-          processors: [transform/fix_time, filter/audit, batch]
-          exporters: [awss3/minio, debug]
+          processors: [transform/fix_time, batch]
+          exporters: [awss3/logs]
+        logs/sessions:
+          receivers: [otlp]
+          processors: [transform/fix_time, filter/session_logs, batch]
+          exporters: [awss3/sessions]
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [awss3/traces]
+        metrics:
+          receivers: [otlp, prometheus]
+          processors: [batch]
+          exporters: [awss3/metrics]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -129,7 +168,7 @@ kind: Ingress
 metadata:
   name: otel-collector-ingress
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   rules:
   - host: otelcol.node-01
     http:
@@ -140,4 +179,4 @@ spec:
           service:
             name: otel-collector-service
             port:
-              number: 55679
+              number: 4318

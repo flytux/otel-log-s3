@@ -2,7 +2,6 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: grafana-pvc
-  namespace: monitoring
 spec:
   accessModes:
     - ReadWriteOnce
@@ -11,11 +10,72 @@ spec:
     requests:
       storage: 10Gi
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+data:
+  clickhouse.yaml: |
+    apiVersion: 1
+    prune: true
+    deleteDatasources:
+      - name: ClickHouse
+        orgId: 1
+    datasources:
+      - name: ClickHouse
+        uid: clickhouse
+        type: grafana-clickhouse-datasource
+        access: proxy
+        orgId: 1
+        editable: true
+        isDefault: true
+        url: http://clickhouse-service:8123
+        jsonData:
+          host: clickhouse-service
+          port: 8123
+          protocol: http
+          username: default
+          defaultDatabase: default
+          validateSql: true
+          logs:
+            defaultDatabase: default
+            defaultTable: otel_logs
+            timeColumn: Timestamp
+            filterTimeColumn: TimestampTime
+            levelColumn: SeverityText
+            messageColumn: Body
+            selectContextColumns: true
+            contextColumns:
+              - TraceId
+              - SpanId
+              - ServiceName
+              - LogAttributes
+              - ResourceAttributes
+            showLogLinks: true
+          traces:
+            defaultDatabase: default
+            defaultTable: otel_traces
+            traceIdColumn: TraceId
+            spanIdColumn: SpanId
+            parentSpanIdColumn: ParentSpanId
+            operationNameColumn: SpanName
+            serviceNameColumn: ServiceName
+            durationColumn: Duration
+            durationUnit: nanoseconds
+            startTimeColumn: Timestamp
+            tagsColumn: SpanAttributes
+            serviceTagsColumn: ResourceAttributes
+            kindColumn: SpanKind
+            statusCodeColumn: StatusCode
+            statusMessageColumn: StatusMessage
+            traceTimestampTableSuffix: _trace_id_ts
+        secureJsonData:
+          password: clickhouse
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: grafana
-  namespace: monitoring
   labels:
     app: grafana
 spec:
@@ -39,19 +99,26 @@ spec:
               value: "admin"
             - name: GF_SECURITY_ADMIN_PASSWORD
               value: "admin" # 초기 관리자 비밀번호
+            - name: GF_PLUGINS_PREINSTALL
+              value: "grafana-clickhouse-datasource"
           volumeMounts:
             - name: grafana-storage
               mountPath: /var/lib/grafana
+            - name: grafana-datasources
+              mountPath: /etc/grafana/provisioning/datasources/clickhouse.yaml
+              subPath: clickhouse.yaml
       volumes:
         - name: grafana-storage
           persistentVolumeClaim:
             claimName: grafana-pvc
+        - name: grafana-datasources
+          configMap:
+            name: grafana-datasources
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: grafana-service
-  namespace: monitoring
 spec:
   type: ClusterIP
   ports:
@@ -64,10 +131,18 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: grafana-ingress
-  namespace: monitoring
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   rules:  
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana-service
+                port:
+                  number: 3000
     - host: grafana.node-01
       http:
         paths:

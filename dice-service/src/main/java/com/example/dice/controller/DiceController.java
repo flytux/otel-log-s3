@@ -26,6 +26,8 @@ public class DiceController {
         int result = ThreadLocalRandom.current().nextInt(1, 7);
         String userId = (player != null) ? player : "anonymous";
 
+        MDC.put("log_category", "svc");
+        MDC.put("log_type", "http");
         MDC.put("endpoint", "/rolldice");
         MDC.put("http_method", "GET");
         MDC.put("user_id", userId);
