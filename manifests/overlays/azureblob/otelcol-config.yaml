@@ -1,0 +1,106 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins:
+            - http://dice.node-01
+            - http://hyperdx.node-01
+          allowed_headers:
+            - "*"
+          max_age: 7200
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'otel-collector-internal'
+          scrape_interval: 10s
+          static_configs:
+            - targets: ['0.0.0.0:8888']
+processors:
+  batch:
+  transform/fix_time:
+    log_statements:
+      - context: log
+        statements:
+          - set(observed_time_unix_nano, time_unix_nano) where observed_time_unix_nano == 0
+          - set(time_unix_nano, Now()) where time_unix_nano == 0
+          - set(observed_time_unix_nano, time_unix_nano) where observed_time_unix_nano == 0
+  filter/session_logs:
+    error_mode: ignore
+    logs:
+      log_record:
+        - resource.attributes["service.name"] == nil
+        - resource.attributes["service.name"] != "dice-web"
+exporters:
+  azureblob/logs:
+    url: ${env:AZURE_STORAGE_ACCOUNT_URL}
+    auth:
+      type: workload_identity
+      tenant_id: ${env:AZURE_TENANT_ID}
+      client_id: ${env:AZURE_CLIENT_ID}
+      federated_token_file: ${env:AZURE_FEDERATED_TOKEN_FILE}
+    container:
+      logs: otel-logs
+    blob_name_format:
+      logs_format: logs/year=2006/month=01/day=02/hour=15/minute=04/logs.json
+      serial_num_before_extension: true
+  azureblob/traces:
+    url: ${env:AZURE_STORAGE_ACCOUNT_URL}
+    auth:
+      type: workload_identity
+      tenant_id: ${env:AZURE_TENANT_ID}
+      client_id: ${env:AZURE_CLIENT_ID}
+      federated_token_file: ${env:AZURE_FEDERATED_TOKEN_FILE}
+    container:
+      traces: otel-traces
+    blob_name_format:
+      traces_format: traces/year=2006/month=01/day=02/hour=15/minute=04/traces.json
+      serial_num_before_extension: true
+  azureblob/metrics:
+    url: ${env:AZURE_STORAGE_ACCOUNT_URL}
+    auth:
+      type: workload_identity
+      tenant_id: ${env:AZURE_TENANT_ID}
+      client_id: ${env:AZURE_CLIENT_ID}
+      federated_token_file: ${env:AZURE_FEDERATED_TOKEN_FILE}
+    container:
+      metrics: otel-metrics
+    blob_name_format:
+      metrics_format: metrics/year=2006/month=01/day=02/hour=15/minute=04/metrics.json
+      serial_num_before_extension: true
+  azureblob/sessions:
+    url: ${env:AZURE_STORAGE_ACCOUNT_URL}
+    auth:
+      type: workload_identity
+      tenant_id: ${env:AZURE_TENANT_ID}
+      client_id: ${env:AZURE_CLIENT_ID}
+      federated_token_file: ${env:AZURE_FEDERATED_TOKEN_FILE}
+    container:
+      logs: hyperdx-sessions
+    blob_name_format:
+      logs_format: sessions/year=2006/month=01/day=02/hour=15/minute=04/sessions.json
+      serial_num_before_extension: true
+service:
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [transform/fix_time, batch]
+      exporters: [azureblob/logs]
+    logs/sessions:
+      receivers: [otlp]
+      processors: [transform/fix_time, filter/session_logs, batch]
+      exporters: [azureblob/sessions]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [azureblob/traces]
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [batch]
+      exporters: [azureblob/metrics]

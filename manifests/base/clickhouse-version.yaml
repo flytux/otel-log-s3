@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-version
+data:
+  tag: "25.12"
+  serverImage: clickhouse/clickhouse-server:25.12

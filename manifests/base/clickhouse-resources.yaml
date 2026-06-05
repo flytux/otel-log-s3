@@ -1,0 +1,192 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: clickhouse-password
+type: Opaque
+stringData:
+  password: clickhouse
+---
+apiVersion: clickhouse.com/v1alpha1
+kind: KeeperCluster
+metadata:
+  name: clickhouse-keeper
+spec:
+  replicas: 1
+  dataVolumeClaimSpec:
+    storageClassName: local-path
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 5Gi
+  containerTemplate:
+    image:
+      repository: clickhouse/clickhouse-keeper
+      tag: "25.12"
+    env:
+      - name: CLICKHOUSE_RUN_AS_ROOT
+        value: "1"
+---
+apiVersion: clickhouse.com/v1alpha1
+kind: ClickHouseCluster
+metadata:
+  name: clickhouse
+spec:
+  shards: 3
+  replicas: 1
+  keeperClusterRef:
+    name: clickhouse-keeper
+  dataVolumeClaimSpec:
+    storageClassName: local-path
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 20Gi
+  containerTemplate:
+    image:
+      repository: clickhouse/clickhouse-server
+      tag: "25.12"
+    env:
+      - name: CLICKHOUSE_RUN_AS_ROOT
+        value: "1"
+  settings:
+    defaultUserPassword:
+      passwordType: plaintext
+      secret:
+        name: clickhouse-password
+        key: password
+    extraUsersConfig:
+      users:
+        default:
+          named_collection_control: 1
+          show_named_collections: 1
+          show_named_collections_secrets: 1
+          access_management: 0
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse-service
+spec:
+  type: ClusterIP
+  selector:
+    app: clickhouse-server
+    app.kubernetes.io/instance: clickhouse
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+    - name: native
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse-0
+spec:
+  type: ClusterIP
+  selector:
+    app: clickhouse-server
+    app.kubernetes.io/instance: clickhouse
+    clickhouse.com/shard-id: "0"
+    clickhouse.com/replica-id: "0"
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+    - name: native
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse-1
+spec:
+  type: ClusterIP
+  selector:
+    app: clickhouse-server
+    app.kubernetes.io/instance: clickhouse
+    clickhouse.com/shard-id: "1"
+    clickhouse.com/replica-id: "0"
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+    - name: native
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse-2
+spec:
+  type: ClusterIP
+  selector:
+    app: clickhouse-server
+    app.kubernetes.io/instance: clickhouse
+    clickhouse.com/shard-id: "2"
+    clickhouse.com/replica-id: "0"
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+    - name: native
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse-ingest-service
+spec:
+  type: ClusterIP
+  selector:
+    app: clickhouse-server
+    app.kubernetes.io/instance: clickhouse
+    clickhouse.com/shard-id: "0"
+    clickhouse.com/replica-id: "0"
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+    - name: native
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: clickhouse-init
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: clickhouse-init
+          image: clickhouse/clickhouse-server:25.12
+          command:
+            - /bin/sh
+            - /scripts/run.sh
+          volumeMounts:
+            - name: init-runtime-config
+              mountPath: /scripts/run.sh
+              subPath: run.sh
+            - name: init-sql-config
+              mountPath: /scripts/cluster.sql
+              subPath: cluster.sql
+            - name: init-sql-config
+              mountPath: /scripts/ingest.sql
+              subPath: ingest.sql
+      volumes:
+        - name: init-runtime-config
+          configMap:
+            name: clickhouse-init-runtime-config
+            defaultMode: 0755
+        - name: init-sql-config
+          configMap:
+            name: clickhouse-init-sql-config

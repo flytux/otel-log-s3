@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - minio.yaml
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: clickhouse-init-sql-config
+    files:
+      - cluster.sql
+      - ingest.sql
+  - name: otel-collector-config
+    files:
+      - config.yaml=otelcol-config.yaml
+
+patches:
+  - path: otel-collector-minio-env.yaml

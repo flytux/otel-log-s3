@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: clickhouse-init
+spec:
+  template:
+    spec:
+      containers:
+        - name: clickhouse-init
+          env:
+            - name: AZURE_STORAGE_ACCOUNT_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: azure-workload-identity-config
+                  key: AZURE_STORAGE_ACCOUNT_NAME
+            - name: AZURE_STORAGE_ACCOUNT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: azure-workload-identity-config
+                  key: AZURE_STORAGE_ACCOUNT_URL
+            - name: AZURE_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: azure-workload-identity-config
+                  key: AZURE_CLIENT_ID
+            - name: AZURE_TENANT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: azure-workload-identity-config
+                  key: AZURE_TENANT_ID
