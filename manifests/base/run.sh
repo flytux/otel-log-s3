@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-hosts="clickhouse-0 clickhouse-1 clickhouse-2"
-ingest_host="clickhouse-0"
+hosts="clickhouse-clickhouse-0-0-0.clickhouse-clickhouse-headless clickhouse-clickhouse-1-0-0.clickhouse-clickhouse-headless clickhouse-clickhouse-2-0-0.clickhouse-clickhouse-headless"
+ingest_host="clickhouse-clickhouse-0-0-0.clickhouse-clickhouse-headless"
 user="default"
 password="clickhouse"
 opts="--user $user --password $password"
@@ -10,6 +10,7 @@ opts="--user $user --password $password"
 wait_host() {
   host="$1"
   until clickhouse-client --host "$host" $opts --query "SELECT 1" >/dev/null 2>&1; do
+  echo "Check host" $host
     sleep 2
   done
 }
@@ -68,7 +69,7 @@ echo "Applying single-ingest queue schema..."
 apply_file "$ingest_host" /tmp/ingest.sql
 
 echo "Verifying cluster topology..."
-shard_count="$(query_host "$ingest_host" "SELECT count() FROM system.clusters WHERE cluster = 'default'")"
+shard_count="$(query_host "$ingest_host" "SELECT uniqExact(shard_num) FROM system.clusters WHERE cluster = 'default'")"
 if [ "$shard_count" != "3" ]; then
   echo "Expected 3 shard entries in default cluster but found $shard_count"
   exit 1
@@ -82,41 +83,43 @@ object_count="$(query_host "$ingest_host" "
     AND name IN (
       'otel_logs_local',
       'otel_logs_local_dist',
-      'otel_logs_s3',
+      'otel_logs_archive',
       'otel_logs',
       'otel_traces_local',
       'otel_traces_local_dist',
-      'otel_traces_s3',
+      'otel_traces_archive',
       'otel_traces',
+      'otel_traces_hybrid',
       'otel_traces_trace_id_ts',
+      'otel_traces_hybrid_trace_id_ts',
       'hyperdx_sessions_local',
       'hyperdx_sessions_local_dist',
-      'hyperdx_sessions_s3',
+      'hyperdx_sessions_archive',
       'hyperdx_sessions',
       'otel_metrics_gauge_local',
       'otel_metrics_gauge_local_dist',
-      'otel_metrics_gauge_s3',
+      'otel_metrics_gauge_archive',
       'otel_metrics_gauge',
       'otel_metrics_sum_local',
       'otel_metrics_sum_local_dist',
-      'otel_metrics_sum_s3',
+      'otel_metrics_sum_archive',
       'otel_metrics_sum',
       'otel_metrics_histogram_local',
       'otel_metrics_histogram_local_dist',
-      'otel_metrics_histogram_s3',
+      'otel_metrics_histogram_archive',
       'otel_metrics_histogram',
       'otel_metrics_exp_histogram_local',
       'otel_metrics_exp_histogram_local_dist',
-      'otel_metrics_exp_histogram_s3',
+      'otel_metrics_exp_histogram_archive',
       'otel_metrics_exp_histogram',
       'otel_metrics_summary_local',
       'otel_metrics_summary_local_dist',
-      'otel_metrics_summary_s3',
+      'otel_metrics_summary_archive',
       'otel_metrics_summary'
     )
 ")"
-if [ "$object_count" != "33" ]; then
-  echo "Expected 33 local/distributed/S3 query objects but found $object_count"
+if [ "$object_count" != "35" ]; then
+  echo "Expected 35 local/distributed/archive query objects but found $object_count"
   query_host "$ingest_host" "SELECT name, engine FROM system.tables WHERE database = currentDatabase() AND (name LIKE 'otel_%' OR name LIKE 'hyperdx_%') ORDER BY name"
   exit 1
 fi

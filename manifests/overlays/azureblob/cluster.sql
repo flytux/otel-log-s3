@@ -1,19 +1,29 @@
 DROP VIEW IF EXISTS otel_metrics_summary;
+DROP VIEW IF EXISTS otel_metrics_summary_archive;
 DROP VIEW IF EXISTS otel_metrics_summary_s3;
 DROP VIEW IF EXISTS otel_metrics_exp_histogram;
+DROP VIEW IF EXISTS otel_metrics_exp_histogram_archive;
 DROP VIEW IF EXISTS otel_metrics_exp_histogram_s3;
 DROP VIEW IF EXISTS otel_metrics_histogram;
+DROP VIEW IF EXISTS otel_metrics_histogram_archive;
 DROP VIEW IF EXISTS otel_metrics_histogram_s3;
 DROP VIEW IF EXISTS otel_metrics_sum;
+DROP VIEW IF EXISTS otel_metrics_sum_archive;
 DROP VIEW IF EXISTS otel_metrics_sum_s3;
 DROP VIEW IF EXISTS otel_metrics_gauge;
+DROP VIEW IF EXISTS otel_metrics_gauge_archive;
 DROP VIEW IF EXISTS otel_metrics_gauge_s3;
 DROP VIEW IF EXISTS hyperdx_sessions;
+DROP VIEW IF EXISTS hyperdx_sessions_archive;
 DROP VIEW IF EXISTS hyperdx_sessions_s3;
+DROP VIEW IF EXISTS otel_traces_hybrid_trace_id_ts;
 DROP VIEW IF EXISTS otel_traces_trace_id_ts;
+DROP VIEW IF EXISTS otel_traces_hybrid;
 DROP VIEW IF EXISTS otel_traces;
+DROP VIEW IF EXISTS otel_traces_archive;
 DROP VIEW IF EXISTS otel_traces_s3;
 DROP VIEW IF EXISTS otel_logs;
+DROP VIEW IF EXISTS otel_logs_archive;
 DROP VIEW IF EXISTS otel_logs_s3;
 DROP VIEW IF EXISTS otel_traces_grafana;
 
@@ -44,7 +54,9 @@ DROP TABLE IF EXISTS otel_metrics;
 DROP TABLE IF EXISTS otel_metrics_queue;
 DROP TABLE IF EXISTS hyperdx_sessions;
 DROP TABLE IF EXISTS hyperdx_sessions_queue;
+DROP TABLE IF EXISTS otel_traces_hybrid_trace_id_ts;
 DROP TABLE IF EXISTS otel_traces_trace_id_ts;
+DROP TABLE IF EXISTS otel_traces_hybrid;
 DROP TABLE IF EXISTS otel_traces;
 DROP TABLE IF EXISTS otel_traces_queue;
 DROP TABLE IF EXISTS otel_logs;
@@ -441,7 +453,7 @@ ENGINE = Distributed('otel_cluster', 'default', 'otel_metrics_exp_histogram_loca
 CREATE TABLE IF NOT EXISTS otel_metrics_summary_local_dist AS otel_metrics_summary_local
 ENGINE = Distributed('otel_cluster', 'default', 'otel_metrics_summary_local', cityHash64(MetricName, ServiceName));
 
-CREATE VIEW IF NOT EXISTS otel_logs_s3 AS
+CREATE VIEW IF NOT EXISTS otel_logs_archive AS
 SELECT
     Timestamp,
     toDateTime(Timestamp) AS TimestampTime,
@@ -486,7 +498,7 @@ FROM (
     ARRAY JOIN JSONExtractArrayRaw(sl, 'logRecords') AS lr
 );
 
-CREATE VIEW IF NOT EXISTS hyperdx_sessions_s3 AS
+CREATE VIEW IF NOT EXISTS hyperdx_sessions_archive AS
 SELECT
     Timestamp,
     toDateTime(Timestamp) AS TimestampTime,
@@ -531,7 +543,7 @@ FROM (
     ARRAY JOIN JSONExtractArrayRaw(sl, 'logRecords') AS lr
 );
 
-CREATE VIEW IF NOT EXISTS otel_traces_s3 AS
+CREATE VIEW IF NOT EXISTS otel_traces_archive AS
 SELECT
     Timestamp,
     TraceId,
@@ -612,7 +624,7 @@ FROM (
     ARRAY JOIN JSONExtractArrayRaw(ss, 'spans') AS sp
 );
 
-CREATE VIEW IF NOT EXISTS otel_metrics_gauge_s3 AS
+CREATE VIEW IF NOT EXISTS otel_metrics_gauge_archive AS
 SELECT
     ResourceAttributes,
     ResourceSchemaUrl,
@@ -658,7 +670,7 @@ FROM (
     WHERE JSONHas(metric, 'gauge')
 );
 
-CREATE VIEW IF NOT EXISTS otel_metrics_sum_s3 AS
+CREATE VIEW IF NOT EXISTS otel_metrics_sum_archive AS
 SELECT
     ResourceAttributes,
     ResourceSchemaUrl,
@@ -708,7 +720,7 @@ FROM (
     WHERE JSONHas(metric, 'sum')
 );
 
-CREATE VIEW IF NOT EXISTS otel_metrics_histogram_s3 AS
+CREATE VIEW IF NOT EXISTS otel_metrics_histogram_archive AS
 SELECT
     ResourceAttributes,
     ResourceSchemaUrl,
@@ -766,7 +778,7 @@ FROM (
     WHERE JSONHas(metric, 'histogram')
 );
 
-CREATE VIEW IF NOT EXISTS otel_metrics_exp_histogram_s3 AS
+CREATE VIEW IF NOT EXISTS otel_metrics_exp_histogram_archive AS
 SELECT
     ResourceAttributes,
     ResourceSchemaUrl,
@@ -832,7 +844,7 @@ FROM (
     WHERE JSONHas(metric, 'exponentialHistogram')
 );
 
-CREATE VIEW IF NOT EXISTS otel_metrics_summary_s3 AS
+CREATE VIEW IF NOT EXISTS otel_metrics_summary_archive AS
 SELECT
     ResourceAttributes,
     ResourceSchemaUrl,
@@ -929,7 +941,7 @@ SELECT
     ScopeAttributes,
     LogAttributes,
     EventName
-FROM otel_logs_s3
+FROM otel_logs_archive
 WHERE Timestamp < now64(9) - INTERVAL 30 DAY;
 
 CREATE VIEW IF NOT EXISTS hyperdx_sessions AS
@@ -973,10 +985,38 @@ SELECT
     LogAttributes,
     `__hdx_materialized_rum.sessionId`,
     `__hdx_materialized_type`
-FROM hyperdx_sessions_s3
+FROM hyperdx_sessions_archive
 WHERE Timestamp < now64(9) - INTERVAL 30 DAY;
 
 CREATE VIEW IF NOT EXISTS otel_traces AS
+SELECT
+    Timestamp,
+    TraceId,
+    SpanId,
+    ParentSpanId,
+    TraceState,
+    SpanName,
+    SpanKind,
+    ServiceName,
+    ResourceAttributes,
+    ScopeName,
+    ScopeVersion,
+    SpanAttributes,
+    Duration,
+    StatusCode,
+    StatusMessage,
+    `Events.Timestamp`,
+    `Events.Name`,
+    `Events.Attributes`,
+    `Links.TraceId`,
+    `Links.SpanId`,
+    `Links.TraceState`,
+    `Links.Attributes`,
+    `__hdx_materialized_rum.sessionId`
+FROM otel_traces_local_dist
+WHERE Timestamp >= now64(9) - INTERVAL 30 DAY;
+
+CREATE VIEW IF NOT EXISTS otel_traces_hybrid AS
 SELECT
     Timestamp,
     TraceId,
@@ -1027,40 +1067,49 @@ SELECT
     `Links.TraceState`,
     `Links.Attributes`,
     `__hdx_materialized_rum.sessionId`
-FROM otel_traces_s3
+FROM otel_traces_archive
 WHERE Timestamp < now64(9) - INTERVAL 30 DAY;
 
 CREATE VIEW IF NOT EXISTS otel_metrics_gauge AS
 SELECT * FROM otel_metrics_gauge_local_dist
 UNION ALL
-SELECT * FROM otel_metrics_gauge_s3
+SELECT * FROM otel_metrics_gauge_archive
 WHERE TimeUnix < now64(9) - INTERVAL 30 DAY;
 
 CREATE VIEW IF NOT EXISTS otel_metrics_sum AS
 SELECT * FROM otel_metrics_sum_local_dist
 UNION ALL
-SELECT * FROM otel_metrics_sum_s3
+SELECT * FROM otel_metrics_sum_archive
 WHERE TimeUnix < now64(9) - INTERVAL 30 DAY;
 
 CREATE VIEW IF NOT EXISTS otel_metrics_histogram AS
 SELECT * FROM otel_metrics_histogram_local_dist
 UNION ALL
-SELECT * FROM otel_metrics_histogram_s3
+SELECT * FROM otel_metrics_histogram_archive
 WHERE TimeUnix < now64(9) - INTERVAL 30 DAY;
 
 CREATE VIEW IF NOT EXISTS otel_metrics_exp_histogram AS
 SELECT * FROM otel_metrics_exp_histogram_local_dist
 UNION ALL
-SELECT * FROM otel_metrics_exp_histogram_s3
+SELECT * FROM otel_metrics_exp_histogram_archive
 WHERE TimeUnix < now64(9) - INTERVAL 30 DAY;
 
 CREATE VIEW IF NOT EXISTS otel_metrics_summary AS
 SELECT * FROM otel_metrics_summary_local_dist
 UNION ALL
-SELECT * FROM otel_metrics_summary_s3
+SELECT * FROM otel_metrics_summary_archive
 WHERE TimeUnix < now64(9) - INTERVAL 30 DAY;
 
 CREATE VIEW IF NOT EXISTS otel_traces_trace_id_ts AS
+SELECT
+    TraceId,
+    min(Timestamp) AS Start,
+    max(Timestamp) AS End
+FROM otel_traces_local_dist
+WHERE TraceId != ''
+GROUP BY TraceId;
+
+CREATE VIEW IF NOT EXISTS otel_traces_hybrid_trace_id_ts AS
 SELECT
     TraceId,
     min(Start) AS Start,
@@ -1072,7 +1121,7 @@ FROM (
     GROUP BY TraceId
     UNION ALL
     SELECT TraceId, min(Timestamp) AS Start, max(Timestamp) AS End
-    FROM otel_traces_s3
+    FROM otel_traces_archive
     WHERE TraceId != ''
       AND Timestamp < now64(9) - INTERVAL 30 DAY
     GROUP BY TraceId

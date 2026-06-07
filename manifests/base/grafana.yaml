@@ -29,7 +29,7 @@ data:
         orgId: 1
         editable: true
         isDefault: true
-        url: http://clickhouse-service:8123
+        url: http://clickhouse-clickhouse-0-0-0.clickhouse-clickhouse-headless:8123
         jsonData:
           host: clickhouse-service
           port: 8123

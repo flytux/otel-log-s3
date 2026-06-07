@@ -23,9 +23,6 @@ spec:
     image:
       repository: clickhouse/clickhouse-keeper
       tag: "25.12"
-    env:
-      - name: CLICKHOUSE_RUN_AS_ROOT
-        value: "1"
 ---
 apiVersion: clickhouse.com/v1alpha1
 kind: ClickHouseCluster
@@ -47,115 +44,12 @@ spec:
     image:
       repository: clickhouse/clickhouse-server
       tag: "25.12"
-    env:
-      - name: CLICKHOUSE_RUN_AS_ROOT
-        value: "1"
   settings:
     defaultUserPassword:
-      passwordType: plaintext
+      passwordType: password
       secret:
         name: clickhouse-password
         key: password
-    extraUsersConfig:
-      users:
-        default:
-          named_collection_control: 1
-          show_named_collections: 1
-          show_named_collections_secrets: 1
-          access_management: 0
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: clickhouse-service
-spec:
-  type: ClusterIP
-  selector:
-    app: clickhouse-server
-    app.kubernetes.io/instance: clickhouse
-  ports:
-    - name: http
-      port: 8123
-      targetPort: 8123
-    - name: native
-      port: 9000
-      targetPort: 9000
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: clickhouse-0
-spec:
-  type: ClusterIP
-  selector:
-    app: clickhouse-server
-    app.kubernetes.io/instance: clickhouse
-    clickhouse.com/shard-id: "0"
-    clickhouse.com/replica-id: "0"
-  ports:
-    - name: http
-      port: 8123
-      targetPort: 8123
-    - name: native
-      port: 9000
-      targetPort: 9000
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: clickhouse-1
-spec:
-  type: ClusterIP
-  selector:
-    app: clickhouse-server
-    app.kubernetes.io/instance: clickhouse
-    clickhouse.com/shard-id: "1"
-    clickhouse.com/replica-id: "0"
-  ports:
-    - name: http
-      port: 8123
-      targetPort: 8123
-    - name: native
-      port: 9000
-      targetPort: 9000
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: clickhouse-2
-spec:
-  type: ClusterIP
-  selector:
-    app: clickhouse-server
-    app.kubernetes.io/instance: clickhouse
-    clickhouse.com/shard-id: "2"
-    clickhouse.com/replica-id: "0"
-  ports:
-    - name: http
-      port: 8123
-      targetPort: 8123
-    - name: native
-      port: 9000
-      targetPort: 9000
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: clickhouse-ingest-service
-spec:
-  type: ClusterIP
-  selector:
-    app: clickhouse-server
-    app.kubernetes.io/instance: clickhouse
-    clickhouse.com/shard-id: "0"
-    clickhouse.com/replica-id: "0"
-  ports:
-    - name: http
-      port: 8123
-      targetPort: 8123
-    - name: native
-      port: 9000
-      targetPort: 9000
 ---
 apiVersion: batch/v1
 kind: Job

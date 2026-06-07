@@ -16,7 +16,7 @@ metadata:
   name: hyperdx-secret
 type: Opaque
 stringData:
-  HYPERDX_API_KEY: 0d93bdf4-cccd-4fd0-b338-7259a11775a2
+  HYPERDX_API_KEY: 0addd211-b0e3-46ec-9a43-b297f485cc40
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -34,7 +34,7 @@ data:
   SERVER_URL: http://127.0.0.1:8000
   USAGE_STATS_ENABLED: "false"
   DEFAULT_CONNECTIONS: >-
-    [{"name":"Local ClickHouse","host":"http://clickhouse-service:8123","username":"default","password":"clickhouse"}]
+    [{"name":"Local ClickHouse","host":"http://clickhouse-clickhouse-headless:8123","username":"default","password":"clickhouse"}]
   DEFAULT_SOURCES: >-
     [{"from":{"databaseName":"default","tableName":"otel_logs"},"kind":"log","timestampValueExpression":"Timestamp","name":"Logs","displayedTimestampValueExpression":"Timestamp","implicitColumnExpression":"Body","serviceNameExpression":"ServiceName","bodyExpression":"Body","eventAttributesExpression":"LogAttributes","resourceAttributesExpression":"ResourceAttributes","defaultTableSelectExpression":"Timestamp,ServiceName,SeverityText,Body","severityTextExpression":"SeverityText","traceIdExpression":"TraceId","spanIdExpression":"SpanId","connection":"Local ClickHouse","traceSourceId":"Traces","sessionSourceId":"Sessions","metricSourceId":"Metrics"},{"from":{"databaseName":"default","tableName":"otel_traces"},"kind":"trace","timestampValueExpression":"Timestamp","name":"Traces","displayedTimestampValueExpression":"Timestamp","implicitColumnExpression":"SpanName","serviceNameExpression":"ServiceName","eventAttributesExpression":"SpanAttributes","resourceAttributesExpression":"ResourceAttributes","defaultTableSelectExpression":"Timestamp,ServiceName,StatusCode,round(Duration/1e6),SpanName","traceIdExpression":"TraceId","spanIdExpression":"SpanId","durationExpression":"Duration","durationPrecision":9,"parentSpanIdExpression":"ParentSpanId","spanNameExpression":"SpanName","spanKindExpression":"SpanKind","statusCodeExpression":"StatusCode","statusMessageExpression":"StatusMessage","connection":"Local ClickHouse","logSourceId":"Logs","sessionSourceId":"Sessions","metricSourceId":"Metrics"},{"from":{"databaseName":"default","tableName":""},"kind":"metric","timestampValueExpression":"TimeUnix","name":"Metrics","serviceNameExpression":"ServiceName","resourceAttributesExpression":"ResourceAttributes","metricTables":{"gauge":"otel_metrics_gauge","histogram":"otel_metrics_histogram","sum":"otel_metrics_sum","summary":"otel_metrics_summary","exponential histogram":"otel_metrics_exp_histogram"},"connection":"Local ClickHouse","logSourceId":"Logs","traceSourceId":"Traces","sessionSourceId":"Sessions"},{"from":{"databaseName":"default","tableName":"hyperdx_sessions"},"kind":"session","timestampValueExpression":"TimestampTime","name":"Sessions","displayedTimestampValueExpression":"Timestamp","implicitColumnExpression":"Body","serviceNameExpression":"ServiceName","bodyExpression":"Body","eventAttributesExpression":"LogAttributes","resourceAttributesExpression":"ResourceAttributes","defaultTableSelectExpression":"Timestamp,ServiceName,Body","severityTextExpression":"SeverityText","traceIdExpression":"TraceId","spanIdExpression":"SpanId","connection":"Local ClickHouse","logSourceId":"Logs","traceSourceId":"Traces","metricSourceId":"Metrics"}]
 ---
@@ -118,7 +118,7 @@ spec:
               until nc -z hyperdx-mongodb 27017; do
                 sleep 2
               done
-              until wget -qO- http://clickhouse-service:8123/ping | grep -q '^Ok\.$'; do
+              until wget -qO- http://clickhouse-clickhouse-headless:8123/ping | grep -q '^Ok\.$'; do
                 sleep 2
               done
       containers:
