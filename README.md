@@ -1,71 +1,165 @@
-# OTel Collector -> Object Storage -> ClickHouse
+# OTel Collector → ClickHouse → Object Storage (TTL MOVE)
 
-OTel Collector는 수신한 logs / traces / metrics / sessions를 object storage에 원본 JSON으로 저장한다.  
-ClickHouse는 별도 적재 없이 `s3()` / `azureBlobStorage()` 함수를 사용한 **뷰(View)** 로 object storage를 직접 조회한다.
+OTel Collector가 수신한 logs / traces / metrics / sessions를 **ClickHouse에 직접 기입**한다.  
+ClickHouse는 30일 데이터를 로컬 디스크(hot)에 보관하다가 TTL 만료 또는 디스크 여유 30% 미만 시 Object Storage(cold)로 자동 이관한다.  
+hot/cold 데이터를 **동일 테이블로 투명하게 조회**한다.
+
+## 아키텍처
+
+```
+앱 / 브라우저
+    │  OTLP (gRPC :4317 / HTTP :4318)
+    ▼
+OTel Collector
+    │  clickhouse exporter (TCP :9000)
+    ▼
+otel_logs / otel_traces / otel_metrics_* / hyperdx_sessions  ← Distributed 테이블
+    │  rand() 샤딩
+    ▼
+otel_logs_local / ... (ReplicatedMergeTree, 각 shard)
+    │  TTL MOVE: 30일 경과 OR 디스크 여유 30% 미만
+    ▼
+Object Storage (MinIO clickhouse-cold / Azure Blob clickhouse-cold)
+```
 
 ## 구성 요소
 
 | 컴포넌트 | 역할 | 엔드포인트 |
 | --- | --- | --- |
-| OTel Collector | OTLP 수신 후 object storage 저장 | `otel-collector-service:4317`, `:4318` |
-| MinIO (minio overlay) | 원본 저장소 (로컬 S3 호환) | `http://minio-service:9000` |
-| Azure Blob Storage (azureblob overlay) | 원본 저장소 | `https://<account>.blob.core.windows.net` |
-| ClickHouse | 3-shard 클러스터, s3/azureBlobStorage 뷰 조회 | `http://clickhouse-service:8123` |
+| OTel Collector | OTLP 수신 → ClickHouse 기입 | `:4317` (gRPC), `:4318` (HTTP) |
+| ClickHouse | 3-shard 클러스터, 데이터 수신 및 tiered storage | `clickhouse-clickhouse-headless:9000` |
+| MinIO (minio overlay) | cold tier 오브젝트 스토리지 | `http://minio-service:9000` |
+| Azure Blob Storage (azureblob overlay) | cold tier 오브젝트 스토리지 | `https://<account>.blob.core.windows.net` |
 | Grafana | ClickHouse 조회 UI | `http://grafana-service:3000` |
-| HyperDX | ClickHouse 조회 UI | `http://hyperdx.node-01` |
+| HyperDX | 통합 Observability UI | `http://hyperdx.node-01` |
 
-## 버킷/컨테이너 구조
+## ClickHouse 테이블 구조
 
-```text
-otel-logs/logs/year=YYYY/month=MM/day=DD/hour=HH/minute=MM/*.json
-otel-traces/traces/year=YYYY/month=MM/day=DD/hour=HH/minute=MM/*.json
-otel-metrics/metrics/year=YYYY/month=MM/day=DD/hour=HH/minute=MM/*.json
-hyperdx-sessions/sessions/year=YYYY/month=MM/day=DD/hour=HH/minute=MM/*.json
+`manifests/base/clickhouse-version.yaml`이 ClickHouse 이미지 버전을 관리하고, overlay별 `cluster.sql`이 스키마를 정의한다.
+
+| 테이블 | 엔진 | 역할 |
+|--------|------|------|
+| `otel_logs_local` | ReplicatedMergeTree | 실제 데이터 저장 (hot→cold 이관) |
+| `otel_logs` | Distributed | INSERT 라우터 + 전체 shard 조회 |
+| `otel_traces_local` | ReplicatedMergeTree | — |
+| `otel_traces` | Distributed | — |
+| `otel_metrics_gauge_local` | ReplicatedMergeTree | — |
+| `otel_metrics_gauge` | Distributed | — |
+| *(sum / histogram / exp_histogram / summary 동일)* | — | — |
+| `hyperdx_sessions_local` | ReplicatedMergeTree | HyperDX Session Replay |
+| `hyperdx_sessions` | Distributed | — |
+| `otel_traces_trace_id_ts` | VIEW | TraceId 기반 시간 범위 조회 |
+
+### 스토리지 정책 (tiered)
+
+```xml
+<tiered>
+  <volumes>
+    <hot><disk>default</disk></hot>   <!-- 로컬 디스크 -->
+    <cold><disk>s3_cold / azure_cold</disk></cold>
+  </volumes>
+  <move_factor>0.3</move_factor>     <!-- 여유공간 30% 미만 시 cold 이동 -->
+</tiered>
 ```
 
-## ClickHouse 구조
+TTL: `toDateTime(Timestamp) + INTERVAL 30 DAY TO VOLUME 'cold'`
 
-`manifests/base/clickhouse-version.yaml`이 ClickHouse 이미지 버전을 관리하고, overlay별 `cluster.sql`이 각 저장소 연동 방식을 정의한다.
-
-- ClickHouse 3-shard 클러스터 (`clickhouse-0`, `1`, `2`)
-- 로컬 테이블이나 Distributed 테이블 없이 **뷰만** 생성한다.
-- 각 뷰는 쿼리 시점에 object storage를 직접 스캔한다.
-- `cluster.sql`은 3개 shard 모두에 동일하게 적용된다.
+**이동 조건 (둘 중 먼저 충족되는 것):**
+1. 파티션(일 단위) 내 가장 최신 행의 Timestamp + 30일 경과
+2. 로컬 디스크 여유공간 < 30%
 
 ## Overlay별 차이
 
 | | minio | azureblob |
 |---|---|---|
-| 저장소 함수 | `s3()` | `azureBlobStorage()` |
-| 인증 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` 환경변수 | Workload Identity (AccountKey 없는 connection string) |
-| 추가 리소스 | MinIO Deployment / Service / PVC / 버킷 초기화 Job | — |
+| cold 디스크 타입 | `s3` | `azure_blob_storage` |
+| cold 버킷 | `clickhouse-cold` (MinIO) | `clickhouse-cold` (Azure) |
+| 인증 | `access_key_id` / `secret_access_key` | Workload Identity (AccountKey 없음) |
+| 추가 리소스 | MinIO Deployment / PVC / 버킷 초기화 Job | — |
 
 ### azureblob 인증
 
-`azureBlobStorage()` connection string에 AccountKey를 포함하지 않는다.
+`spec.labels`에 `azure.workload.identity/use: "true"` 설정으로 파드에 Workload Identity가 적용된다.  
+`AZURE_STORAGE_ACCOUNT_NAME` 환경변수를 주입하면 `run.sh`가 `__AZURE_STORAGE_ACCOUNT_NAME__` 플레이스홀더를 치환한다.
+
+## OTel Collector 설정
+
+### Session Replay 라우팅
+
+`LogAttributes["sessionId"]` 속성 유무로 일반 로그와 세션 로그를 분리한다.
 
 ```
-DefaultEndpointsProtocol=https;AccountName=<account>;EndpointSuffix=core.windows.net
+로그 (sessionId 없음) → filter/no_session → clickhouse/otel → otel_logs
+로그 (sessionId 있음) → filter/session_only → clickhouse/sessions → hyperdx_sessions
 ```
 
-ClickHouse 파드에 Azure Workload Identity가 설정되면 자동으로 `DefaultAzureCredential`로 인증된다.  
-`AZURE_STORAGE_ACCOUNT_NAME` 환경변수를 `clickhouse-init` Job에 주입하면 `run.sh`가 `__AZURE_STORAGE_ACCOUNT_NAME__` 플레이스홀더를 치환한다.
+### 병목 방지 설정
 
-## 조회 뷰
+```yaml
+batch:
+  send_batch_size: 10000   # 한 번에 10k 행 묶어 INSERT 빈도 감소
+  timeout: 5s
 
-UI가 사용하는 최종 뷰는 아래와 같다. 모든 뷰는 쿼리 시점에 object storage 전체를 와일드카드 패턴으로 스캔한다.
+clickhouse/otel:
+  num_consumers: 4         # 동시 연결 제한 (too_many_parts 방지)
+  queue_size: 5000         # burst 흡수용 큐
+  max_elapsed_time: 600s   # 장애 시 10분간 재시도
+```
 
-| 뷰 | 데이터 |
-|---|---|
-| `otel_logs` | logs |
-| `otel_traces` | traces |
-| `otel_traces_trace_id_ts` | trace ID 기반 시간 범위 조회 |
-| `hyperdx_sessions` | RUM sessions |
-| `otel_metrics_gauge` | gauge metrics |
-| `otel_metrics_sum` | sum metrics |
-| `otel_metrics_histogram` | histogram metrics |
-| `otel_metrics_exp_histogram` | exponential histogram metrics |
-| `otel_metrics_summary` | summary metrics |
+## 저장 방식별 용량 비교
+
+### OTel → S3 원본 JSON vs ClickHouse TTL MOVE
+
+| 방식 | 포맷 | 상대 크기 |
+|------|------|----------|
+| OTel Collector → S3 직접 저장 | 원본 JSON (텍스트, 행 단위) | **22x** |
+| ClickHouse TTL MOVE → S3 | 컬럼형 바이너리 + ZSTD 압축 | **1x** (기준) |
+| ClickHouse 비압축 원본 | — | 17x |
+
+실측 기준 (otel_logs, 약 2,800행):
+
+```
+원본 JSON 추정:  ~4.1 MiB
+ClickHouse ZSTD: ~186 KiB  → 약 22배 차이
+```
+
+### 압축률이 높은 이유
+
+```
+[원본 JSON - 행 단위]
+{"Timestamp":"2024-01-01T00:00:01Z","ServiceName":"dice","SeverityText":"INFO","Body":"GET /roll",...}
+{"Timestamp":"2024-01-01T00:00:02Z","ServiceName":"dice","SeverityText":"INFO","Body":"GET /roll",...}
+→ 필드명 반복, 텍스트 형식
+
+[ClickHouse - 컬럼 단위 + ZSTD]
+Timestamp 컬럼   : Delta 인코딩 → 차이값만 저장 (시계열 특화)
+ServiceName 컬럼 : LowCardinality → 딕셔너리 인코딩 (반복값 1바이트)
+SeverityText 컬럼: LowCardinality → 동일
+→ 컬럼별 연속 동일값 압축 후 ZSTD 최종 압축
+```
+
+### 실제 압축 비율 확인 쿼리
+
+```sql
+SELECT
+  table,
+  sum(rows) AS rows,
+  formatReadableSize(sum(data_compressed_bytes))   AS compressed,
+  formatReadableSize(sum(data_uncompressed_bytes)) AS uncompressed,
+  round(sum(data_uncompressed_bytes) / sum(data_compressed_bytes), 1) AS compress_ratio
+FROM system.parts
+WHERE database = currentDatabase() AND table LIKE '%_local' AND active = 1
+GROUP BY table ORDER BY table;
+```
+
+### 운영 환경 예상 절감 효과 (로그 1TB/월 기준)
+
+| 방식 | S3 저장량 | 비고 |
+|------|----------|------|
+| OTel 원본 JSON → S3 | ~1,000 GB | 텍스트, 필드명 포함 |
+| ClickHouse TTL MOVE | **~45 GB** | 컬럼형 ZSTD, 약 22배 절감 |
+
+> 압축률은 데이터 특성(반복도, 카디널리티)에 따라 달라지며, 실제 환경에서는 10배~30배 범위에서 나타난다.
 
 ## 배포
 
@@ -81,63 +175,155 @@ kubectl apply -k manifests/overlays/minio
 kubectl apply -k manifests/overlays/azureblob
 ```
 
-배포 후 확인:
+배포 후 초기화 확인:
 
 ```bash
-kubectl wait --for=condition=complete job/clickhouse-init --timeout=180s
-kubectl logs job/clickhouse-init
+kubectl wait --for=condition=complete job/clickhouse-init -n monitoring --timeout=180s
+kubectl logs job/clickhouse-init -n monitoring
 ```
 
-`clickhouse-init` Job은 아래를 수행한다.
+`clickhouse-init` Job 수행 내용:
+1. ClickHouse Keeper + 3개 shard 준비 대기
+2. `cluster.sql` 적용 (테이블 재생성)
+3. 클러스터 topology 및 테이블 생성 검증
 
-1. ClickHouse Keeper와 3개 shard 준비 대기
-2. 각 shard에 `cluster.sql` 적용 (뷰 및 UDF 생성)
-3. cluster shard 수와 9개 뷰 생성 여부 검증
+## 검증 쿼리
 
-## 성능 특성
-
-- 모든 쿼리가 object storage를 실시간 스캔하므로 **쿼리 범위가 넓을수록 비용이 증가**한다.
-- 파티션 경로(`year=*/month=*/...`)를 활용한 **시간 범위 필터**를 반드시 사용해야 한다.
-- ClickHouse 로컬 테이블이 없으므로 초기 배포 시 backfill 대기 시간이 없다.
-
-## 로컬 확인
+### 1. 클러스터 및 테이블 확인
 
 ```bash
-kubectl port-forward svc/clickhouse-service 8123:8123
-curl 'http://localhost:8123/?user=default&password=clickhouse' --data 'SELECT version()'
-```
+kubectl exec -n monitoring clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --user default --password clickhouse \
+  --query "
+-- 3 shard 확인
+SELECT uniqExact(shard_num) AS shards FROM system.clusters WHERE cluster='default';
 
-```sql
--- 1) 클러스터가 3 shard인지 확인
-SELECT
-  uniqExact(shard_num) AS uniq_shards,
-  groupArrayDistinct(concat(toString(shard_num), ':', host_name)) AS members
-FROM system.clusters
-WHERE cluster = 'default';
-
--- 2) 뷰 목록 확인
-SELECT name, engine
+-- 테이블 목록 (14 테이블 + 1 VIEW)
+SELECT name, engine, storage_policy
 FROM system.tables
 WHERE database = currentDatabase()
   AND (name LIKE 'otel_%' OR name LIKE 'hyperdx_%')
-ORDER BY name;
+ORDER BY name;"
+```
 
--- 3) logs 조회 (시간 범위 필수)
-SELECT count()
-FROM otel_logs
-WHERE Timestamp >= now64(9) - INTERVAL 1 HOUR;
+### 2. 데이터 수집 확인
 
--- 4) traces 조회
-SELECT count()
-FROM otel_traces
-WHERE Timestamp >= now64(9) - INTERVAL 1 HOUR;
+```bash
+kubectl exec -n monitoring clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --user default --password clickhouse \
+  --query "
+SELECT table, sum(rows) AS rows, min(min_time) AS oldest, max(max_time) AS newest
+FROM system.parts
+WHERE database = currentDatabase() AND table LIKE '%_local' AND active = 1
+GROUP BY table ORDER BY table;"
+```
 
--- 5) metrics 조회
+### 3. 3개 샤드 균등 분산 확인
+
+```bash
+kubectl exec -n monitoring clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --user default --password clickhouse \
+  --query "
+SELECT hostName() AS shard, table, sum(rows) AS rows
+FROM clusterAllReplicas('default', system.parts)
+WHERE database = currentDatabase() AND table LIKE '%_local' AND active = 1
+GROUP BY shard, table ORDER BY table, shard;"
+```
+
+### 4. TTL MOVE (cold 이관) 확인
+
+```bash
+kubectl exec -n monitoring clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --user default --password clickhouse \
+  --query "
+-- hot/cold 디스크별 파트 분포
+SELECT disk_name, table, count() AS parts, sum(rows) AS rows,
+       formatReadableSize(sum(bytes_on_disk)) AS size
+FROM system.parts
+WHERE database = currentDatabase() AND table LIKE '%_local' AND active = 1
+GROUP BY disk_name, table ORDER BY disk_name, table;"
+```
+
+cold로 이관 전 강제 트리거:
+
+```sql
+-- 특정 테이블 TTL 즉시 적용
+ALTER TABLE otel_logs_local MATERIALIZE TTL;
+
+-- 특정 파티션 강제 merge (TTL 재평가)
+OPTIMIZE TABLE otel_logs_local PARTITION '2024-01-01' FINAL;
+```
+
+### 5. 스토리지 정책 확인
+
+```bash
+kubectl exec -n monitoring clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --user default --password clickhouse \
+  --query "
+SELECT policy_name, volume_name, disks, move_factor
+FROM system.storage_policies WHERE policy_name = 'tiered'
+FORMAT Vertical;"
+```
+
+### 6. 데이터 조회 (hot + cold 통합)
+
+```bash
+kubectl exec -n monitoring clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --user default --password clickhouse \
+  --query "
+-- 최근 1시간 로그
+SELECT count() FROM otel_logs WHERE Timestamp >= now() - INTERVAL 1 HOUR;
+
+-- 최근 1시간 트레이스
+SELECT count() FROM otel_traces WHERE Timestamp >= now() - INTERVAL 1 HOUR;
+
+-- 메트릭 서비스별 집계
 SELECT ServiceName, MetricName, count()
 FROM otel_metrics_gauge
-WHERE TimeUnix >= now64(9) - INTERVAL 1 HOUR
+WHERE TimeUnix >= now() - INTERVAL 1 HOUR
 GROUP BY ServiceName, MetricName
-ORDER BY count() DESC
-LIMIT 10;
+ORDER BY count() DESC LIMIT 10;"
+```
+
+### 7. OTel Collector 상태 확인
+
+```bash
+# 최근 에러 확인
+kubectl logs -n monitoring -l app.kubernetes.io/name=opentelemetry-collector --tail=20
+
+# ClickHouse INSERT 통계
+kubectl exec -n monitoring clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --user default --password clickhouse \
+  --query "
+SELECT event, value FROM system.events
+WHERE event IN ('InsertQuery','InsertedRows','InsertedBytes','RejectedInserts','DelayedInserts')
+ORDER BY event;"
+```
+
+## MinIO 버킷 구조
+
+```text
+clickhouse-cold/          ← ClickHouse TTL MOVE 대상 (유일한 필수 버킷)
+hyperdx-sessions/         ← HyperDX Session Replay 사용 시
+```
+
+cold 버킷 내 파일은 ClickHouse 내부 포맷(해시 경로)으로 저장되며, ClickHouse를 통해서만 조회된다.
+
+```bash
+# MinIO 내 cold 데이터 확인
+kubectl exec -n monitoring <minio-pod> -- \
+  mc ls --recursive local/clickhouse-cold/ | wc -l
+```
+
+## 로컬 접속
+
+```bash
+# ClickHouse HTTP API
+kubectl port-forward -n monitoring svc/clickhouse-clickhouse-headless 8123:8123
+curl 'http://localhost:8123/?user=default&password=clickhouse' --data 'SELECT version()'
+
+# ClickHouse CLI (파드 직접)
+kubectl exec -n monitoring clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --user default --password clickhouse
 ```
 
