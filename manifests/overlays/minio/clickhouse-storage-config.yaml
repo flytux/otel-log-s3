@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-storage-config
+data:
+  storage.xml: |
+    <clickhouse>
+      <storage_configuration>
+        <disks>
+          <s3_cold>
+            <type>s3</type>
+            <endpoint>http://minio-service:9000/clickhouse-cold/</endpoint>
+            <access_key_id>minioadmin</access_key_id>
+            <secret_access_key>minioadmin</secret_access_key>
+            <region>us-east-1</region>
+            <use_environment_credentials>false</use_environment_credentials>
+            <s3_use_virtual_hosted_style_addressing>false</s3_use_virtual_hosted_style_addressing>
+          </s3_cold>
+        </disks>
+        <policies>
+          <tiered>
+            <volumes>
+              <hot>
+                <disk>default</disk>
+                <max_data_part_size_bytes>1073741824</max_data_part_size_bytes>
+              </hot>
+              <cold>
+                <disk>s3_cold</disk>
+              </cold>
+            </volumes>
+            <!-- hot 볼륨 여유공간이 30% 미만이면 cold로 이동 -->
+            <move_factor>0.3</move_factor>
+          </tiered>
+        </policies>
+      </storage_configuration>
+    </clickhouse>

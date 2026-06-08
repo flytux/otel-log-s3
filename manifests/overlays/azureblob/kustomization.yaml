@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - ../../base
   - workload-identity.yaml
+  - clickhouse-storage-config.yaml
 
 generatorOptions:
   disableNameSuffixHash: true
@@ -20,5 +21,6 @@ configMapGenerator:
       - config.yaml=otelcol-config.yaml
 
 patches:
+  - path: clickhouse-storage-patch.yaml
   - path: clickhouse-workload-identity-patch.yaml
   - path: otelcol-workload-identity-patch.yaml

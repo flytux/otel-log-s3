@@ -20,7 +20,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
-            - name: AWS_ACCESS_KEY_ID
-              value: "minioadmin"
-            - name: AWS_SECRET_ACCESS_KEY
-              value: "minioadmin"
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: clickhouse-password
+                  key: password

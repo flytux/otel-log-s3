@@ -103,9 +103,7 @@ spec:
             echo "waiting for minio..."
             sleep 2
           done
-          mc mb --ignore-existing local/otel-logs
-          mc mb --ignore-existing local/otel-traces
-          mc mb --ignore-existing local/otel-metrics
+          mc mb --ignore-existing local/clickhouse-cold
 ---
 apiVersion: batch/v1
 kind: Job

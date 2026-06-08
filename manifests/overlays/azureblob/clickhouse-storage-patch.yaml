@@ -1,0 +1,14 @@
+apiVersion: clickhouse.com/v1alpha1
+kind: ClickHouseCluster
+metadata:
+  name: clickhouse
+spec:
+  podTemplate:
+    volumes:
+      - name: storage-config
+        configMap:
+          name: clickhouse-storage-config
+  containerTemplate:
+    volumeMounts:
+      - name: storage-config
+        mountPath: /etc/clickhouse-server/config.d/

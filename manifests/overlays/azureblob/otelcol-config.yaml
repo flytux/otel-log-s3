@@ -20,7 +20,12 @@ receivers:
           static_configs:
             - targets: ['0.0.0.0:8888']
 processors:
+processors:
+  # 배치 크기/시간 최적화: ClickHouse INSERT 횟수 줄여 too_many_parts 방지
   batch:
+    send_batch_size: 10000       # 한 번에 10k 행 묶어서 전송
+    send_batch_max_size: 20000
+    timeout: 5s                  # 최대 5초 대기 후 강제 flush
   transform/fix_time:
     log_statements:
       - context: log
@@ -28,57 +33,76 @@ processors:
           - set(observed_time_unix_nano, time_unix_nano) where observed_time_unix_nano == 0
           - set(time_unix_nano, Now()) where time_unix_nano == 0
           - set(observed_time_unix_nano, time_unix_nano) where observed_time_unix_nano == 0
-  filter/session_logs:
+  # Session Replay 로그만 통과 (HyperDX 브라우저 SDK가 sessionId 속성으로 전송)
+  filter/session_only:
     error_mode: ignore
     logs:
       log_record:
-        - resource.attributes["service.name"] == nil
-        - resource.attributes["service.name"] != "dice-web"
+        - attributes["sessionId"] == nil
+  # 일반 로그만 통과 (sessionId 없는 것)
+  filter/no_session:
+    error_mode: ignore
+    logs:
+      log_record:
+        - attributes["sessionId"] != nil
 exporters:
-  azureblob/logs:
-    auth:
-      authenticator: azureauth
-    container: otel-logs
-    root_folder: logs
-  azureblob/traces:
-    auth:
-      authenticator: azureauth
-    container: otel-traces
-    root_folder: traces
-  azureblob/metrics:
-    auth:
-      authenticator: azureauth
-    container: otel-metrics
-    root_folder: metrics
-  azureblob/sessions:
-    auth:
-      authenticator: azureauth
-    container: hyperdx-sessions
-    root_folder: sessions
-extensions:
-  azureauth:
-    # Workload Identity를 통해 자동으로 DefaultAzureCredential이 사용됩니다.
-    # AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_FEDERATED_TOKEN_FILE 환경변수는
-    # azure-workload-identity webhook이 자동으로 주입합니다.
+  clickhouse/otel:
+    endpoint: tcp://clickhouse-clickhouse-headless:9000
+    database: default
+    username: default
+    password: ${env:CLICKHOUSE_PASSWORD}
+    create_schema: false
+    logs_table_name: otel_logs
+    traces_table_name: otel_traces
+    metrics_table_name: otel_metrics
+    timeout: 30s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 60s
+      max_elapsed_time: 600s     # 10분간 재시도
+    sending_queue:
+      enabled: true
+      num_consumers: 4           # 동시 연결 줄여 too_many_parts 방지
+      queue_size: 5000           # 큐 크기 증가로 burst 흡수
+  clickhouse/sessions:
+    endpoint: tcp://clickhouse-clickhouse-headless:9000
+    database: default
+    username: default
+    password: ${env:CLICKHOUSE_PASSWORD}
+    create_schema: false
+    logs_table_name: hyperdx_sessions
+    timeout: 30s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 60s
+      max_elapsed_time: 600s
+    sending_queue:
+      enabled: true
+      num_consumers: 2
+      queue_size: 1000
 service:
-  extensions: [azureauth]
   telemetry:
     logs:
       level: info
+    metrics:
+      level: detailed            # OTel Collector 내부 메트릭 상세 수집
+      address: 0.0.0.0:8888
   pipelines:
     logs:
       receivers: [otlp]
-      processors: [transform/fix_time, batch]
-      exporters: [azureblob/logs]
+      processors: [transform/fix_time, filter/no_session, batch]
+      exporters: [clickhouse/otel]
     logs/sessions:
       receivers: [otlp]
-      processors: [transform/fix_time, filter/session_logs, batch]
-      exporters: [azureblob/sessions]
+      processors: [transform/fix_time, filter/session_only, batch]
+      exporters: [clickhouse/sessions]
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [azureblob/traces]
+      exporters: [clickhouse/otel]
     metrics:
       receivers: [otlp, prometheus]
       processors: [batch]
-      exporters: [azureblob/metrics]
+      exporters: [clickhouse/otel]

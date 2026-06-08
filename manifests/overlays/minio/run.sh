@@ -10,7 +10,7 @@ opts="--user $user --password $password"
 wait_host() {
   host="$1"
   until clickhouse-client --host "$host" $opts --query "SELECT 1" >/dev/null 2>&1; do
-    echo "Check host" $host
+    echo "Check host" "$host"
     sleep 2
   done
 }
@@ -22,8 +22,7 @@ query_host() {
 
 apply_file() {
   host="$1"
-  file="$2"
-  clickhouse-client --host "$host" $opts --multiquery < "$file"
+  clickhouse-client --host "$host" $opts --multiquery < "$2"
 }
 
 echo "Waiting for ClickHouse Keeper..."
@@ -48,26 +47,39 @@ if [ "$shard_count" != "3" ]; then
   exit 1
 fi
 
-echo "Verifying S3 query views..."
-object_count="$(query_host "$ingest_host" "
+echo "Verifying OTel tables..."
+table_count="$(query_host "$ingest_host" "
   SELECT count()
   FROM system.tables
   WHERE database = currentDatabase()
     AND name IN (
-      'otel_logs',
-      'otel_traces',
-      'otel_traces_trace_id_ts',
-      'hyperdx_sessions',
-      'otel_metrics_gauge',
-      'otel_metrics_sum',
-      'otel_metrics_histogram',
-      'otel_metrics_exp_histogram',
-      'otel_metrics_summary'
+      'otel_logs_local',
+      'otel_traces_local',
+      'otel_metrics_gauge_local',
+      'otel_metrics_sum_local',
+      'otel_metrics_histogram_local',
+      'otel_metrics_exp_histogram_local',
+      'otel_metrics_summary_local'
     )
+    AND engine LIKE '%ReplicatedMergeTree%'
 ")"
-if [ "$object_count" != "9" ]; then
-  echo "Expected 9 S3 query views but found $object_count"
-  query_host "$ingest_host" "SELECT name, engine FROM system.tables WHERE database = currentDatabase() AND (name LIKE 'otel_%' OR name LIKE 'hyperdx_%') ORDER BY name"
+if [ "$table_count" != "7" ]; then
+  echo "Expected 7 OTel tables but found $table_count"
+  query_host "$ingest_host" "SELECT name, engine FROM system.tables WHERE database = currentDatabase() ORDER BY name"
+  exit 1
+fi
+
+echo "Verifying storage policy..."
+policy_count="$(query_host "$ingest_host" "
+  SELECT count()
+  FROM system.tables
+  WHERE database = currentDatabase()
+    AND name IN ('otel_logs_local', 'otel_traces_local', 'otel_metrics_gauge_local')
+    AND storage_policy = 'tiered'
+")"
+if [ "$policy_count" != "3" ]; then
+  echo "Storage policy 'tiered' not applied to tables (found $policy_count/3)"
+  query_host "$ingest_host" "SELECT name, storage_policy FROM system.tables WHERE database = currentDatabase() AND name LIKE 'otel_%'"
   exit 1
 fi
 

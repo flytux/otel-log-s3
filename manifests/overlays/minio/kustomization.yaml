@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - ../../base
   - minio.yaml
+  - clickhouse-storage-config.yaml
 
 generatorOptions:
   disableNameSuffixHash: true
@@ -20,4 +21,5 @@ configMapGenerator:
       - config.yaml=otelcol-config.yaml
 
 patches:
+  - path: clickhouse-storage-patch.yaml
   - path: otel-collector-minio-env.yaml
