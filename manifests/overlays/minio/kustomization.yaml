@@ -8,10 +8,13 @@ generatorOptions:
   disableNameSuffixHash: true
 
 configMapGenerator:
+  - name: clickhouse-init-runtime-config
+    behavior: replace
+    files:
+      - run.sh
   - name: clickhouse-init-sql-config
     files:
       - cluster.sql
-      - ingest.sql
   - name: otel-collector-config
     files:
       - config.yaml=otelcol-config.yaml

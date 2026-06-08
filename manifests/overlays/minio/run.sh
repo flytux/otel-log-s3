@@ -10,7 +10,7 @@ opts="--user $user --password $password"
 wait_host() {
   host="$1"
   until clickhouse-client --host "$host" $opts --query "SELECT 1" >/dev/null 2>&1; do
-  echo "Check host" $host
+    echo "Check host" $host
     sleep 2
   done
 }
@@ -36,16 +36,9 @@ for host in $hosts; do
   wait_host "$host"
 done
 
-sed \
-  -e "s#__AZURE_STORAGE_ACCOUNT_URL__#${AZURE_STORAGE_ACCOUNT_URL:-}#g" \
-  -e "s#__AZURE_STORAGE_ACCOUNT_NAME__#${AZURE_STORAGE_ACCOUNT_NAME:-}#g" \
-  -e "s#__AZURE_CLIENT_ID__#${AZURE_CLIENT_ID:-}#g" \
-  -e "s#__AZURE_TENANT_ID__#${AZURE_TENANT_ID:-}#g" \
-  /scripts/cluster.sql > /tmp/cluster.sql
-
 echo "Applying cluster schema..."
 for host in $hosts; do
-  apply_file "$host" /tmp/cluster.sql
+  apply_file "$host" /scripts/cluster.sql
 done
 
 echo "Verifying cluster topology..."

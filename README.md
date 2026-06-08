@@ -1,14 +1,14 @@
-# OTel Collector -> MinIO(S3) -> ClickHouse hybrid query
+# OTel Collector -> Object Storage -> ClickHouse
 
-OTel Collector는 계속해서 **MinIO(S3)** 에 원본을 저장하고, ClickHouse는 **3 shard-local MergeTree + Distributed + archive view** 구조로 최근 30일은 로컬에서 빠르게 조회하고 그보다 오래된 구간은 archive 원본을 함께 읽는다.
+OTel Collector는 계속해서 object storage에 원본을 저장하고, ClickHouse는 **3 shard-local MergeTree + Distributed** 구조로 조회를 처리한다. Azure Blob overlay에서는 logs / traces 를 ClickHouse로 전량 적재해, 조회 시 Azure Blob의 원본 JSON을 다시 직접 파싱하지 않는다.
 
 ## 구성 요소
 
 | 컴포넌트 | 역할 | 엔드포인트 |
 | --- | --- | --- |
-| OTel Collector | OTLP 수신 후 MinIO bucket별 저장 | `otel-collector-service:4317`, `:4318` |
-| MinIO | S3 호환 원본 저장소 | `http://minio-service:9000` |
-| ClickHouse | 3-shard 로컬 적재 + S3 보강 조회 | `http://clickhouse-service:8123` |
+| OTel Collector | OTLP 수신 후 object storage 컨테이너별 저장 | `otel-collector-service:4317`, `:4318` |
+| Azure Blob Storage | 원본 저장소 | `<storage-account-url>` |
+| ClickHouse | 3-shard 로컬 적재 + 분산 조회 | `http://clickhouse-service:8123` |
 | Grafana | ClickHouse 조회 UI | `http://grafana-service:3000` |
 | HyperDX | ClickHouse 조회 UI | `http://hyperdx.node-01` |
 
@@ -23,48 +23,49 @@ hyperdx-sessions/sessions/year=YYYY/month=MM/day=DD/hour=HH/minute=MM/*.json
 
 ## ClickHouse 구조
 
-`manifests/clickhouse-cluster.yaml`은 다음 구조를 만들고, `manifests/clickhouse-version.yaml`이 ClickHouse 이미지 버전을, `manifests/clickhouse-azureblobstore-version.yaml`이 Azure Blob Storage 관련 버전을 별도로 관리한다. 세 파일은 분리되어 있어 Kustomize에서 필요에 따라 개별 선택이 가능하다.
+`manifests/base/clickhouse-version.yaml`이 ClickHouse 이미지 버전을 관리하고, overlay별 SQL/patch가 각 저장소 연동 방식을 정의한다.
 
 1. `clickhouse` StatefulSet 3개 pod (`clickhouse-0..2`)  
 2. shard마다 `*_local` MergeTree 테이블 보유  
 3. `*_local_dist` Distributed 테이블로 3 shard 조회 분산  
-4. `*_archive` view가 archive 원본을 직접 파싱  
-5. 최종 노출 객체 중 logs / metrics / sessions 는 **최근 30일 local + 30일 초과 archive** 를 `UNION ALL` 로 합쳐 제공하고, traces 는 UI 안정성을 위해 `otel_traces`(최근 30일 local)와 `otel_traces_hybrid`(최근 30일 local + 30일 초과 archive)로 분리해 제공
+4. logs / traces 는 AzureQueue가 object storage 원본을 읽어 ClickHouse 테이블로 계속 적재  
+5. metrics / sessions 는 최근 30일만 local에 유지하고, 오래된 구간은 archive view를 통해 직접 읽음
 
 즉 UI는 기존 테이블명을 그대로 쓰지만, 내부적으로는 다음처럼 동작한다.
 
-- 최근 30일: shard-local MergeTree + Distributed
-- 30일 초과: archive view
-- 기간이 30일 경계를 걸치면 두 소스를 함께 조회
+- logs / traces: 전체 기간을 shard-local MergeTree + Distributed에서 조회
+- metrics / sessions: 최근 30일은 local, 30일 초과는 archive view 조회
 
 ## 적재 방식
 
-- `clickhouse-0`만 S3Queue ingest 노드로 동작한다.
+- `clickhouse-0`만 AzureQueue ingest 노드로 동작한다.
 - `otel_logs_queue`, `otel_traces_queue`, `otel_metrics_queue`, `hyperdx_sessions_queue` 는 **오직 ingest 노드에만** 생성된다.
 - queue의 materialized view는 직접 `*_local_dist` 로 insert 해서 3 shard에 분산 적재한다.
-- queue 생성 시 `last_processed_path`를 **현재 시각 기준 30일 전 직전 경로**로 잡아 초기 적재 범위를 최근 30일로 제한한다.
+- Azure Blob 인증은 SQL에서 `use_workload_identity = 1`과 `client_id` / `tenant_id`를 함께 설정해 Workload Identity를 사용한다.
+- logs / traces queue는 `last_processed_path` 없이 시작해 초기 배포 시 저장된 전체 이력을 backfill한다.
+- metrics / sessions queue는 `last_processed_path`를 **현재 시각 기준 30일 전 직전 경로**로 잡아 초기 적재 범위를 최근 30일로 제한한다.
 - 이후 새로 들어오는 archive 객체는 계속 로컬 shard로 적재된다.
 
-이렇게 해야 S3Queue를 3개 shard에서 동시에 돌릴 때 생길 수 있는 **중복 소비**를 피할 수 있다.
+이렇게 해야 AzureQueue를 3개 shard에서 동시에 돌릴 때 생길 수 있는 **중복 소비**를 피할 수 있다.
 
 ## 보존 정책
 
-모든 `*_local` 테이블은 30일 TTL을 가진다.
+logs / traces 는 `*_local` 테이블에 전체 이력을 유지하고, metrics / sessions 만 30일 TTL을 가진다.
 
-- logs / traces / sessions: `TTL Timestamp + INTERVAL 30 DAY DELETE`
+- sessions: `TTL Timestamp + INTERVAL 30 DAY DELETE`
 - metrics: `TTL TimeUnix + INTERVAL 30 DAY DELETE`
 
-따라서 로컬 디스크에는 최근 30일만 남고, 오래된 데이터는 archive 원본만 남는다.
+따라서 logs / traces 조회는 항상 ClickHouse 테이블에서 처리되고, metrics / sessions 만 오래된 데이터가 archive 원본으로 남는다.
 
 ## 조회 테이블
 
 UI가 사용하는 최종 객체는 아래와 같다.
 
 - logs: `otel_logs`
-- traces (UI-safe recent): `otel_traces`
-- trace lookup (UI-safe recent): `otel_traces_trace_id_ts`
-- traces (hybrid archive): `otel_traces_hybrid`
-- trace lookup (hybrid archive): `otel_traces_hybrid_trace_id_ts`
+- traces: `otel_traces`
+- trace lookup: `otel_traces_trace_id_ts`
+- traces (compat alias): `otel_traces_hybrid`
+- trace lookup (compat alias): `otel_traces_hybrid_trace_id_ts`
 - sessions: `hyperdx_sessions`
 - metrics:
   - `otel_metrics_gauge`
@@ -73,8 +74,7 @@ UI가 사용하는 최종 객체는 아래와 같다.
   - `otel_metrics_exp_histogram`
   - `otel_metrics_summary`
 
-`otel_traces`와 `otel_traces_trace_id_ts`는 HyperDX/기본 UI가 최근 데이터만 안정적으로 보도록 local trace만 읽는다.
-오래된 trace까지 함께 조회해야 하면 `otel_traces_hybrid`와 `otel_traces_hybrid_trace_id_ts`를 사용한다.
+`otel_logs`, `otel_traces`, `otel_traces_hybrid`는 모두 ClickHouse에 적재된 shard-local 데이터를 읽는다. `otel_traces_hybrid*`는 기존 조회 경로와의 호환성을 위해 유지한다.
 
 ## 배포
 
@@ -94,17 +94,16 @@ kubectl logs job/clickhouse-init
 
 1. keeper와 3개 ClickHouse shard 준비 대기
 2. 각 shard에 local / Distributed / archive hybrid schema 적용
-3. ingest 노드에만 S3Queue 및 materialized view 생성
+3. ingest 노드에만 AzureQueue 및 materialized view 생성
 4. cluster shard 수와 주요 객체 생성 여부 검증
 
 ## 성능 특성
 
-- 최근 30일 쿼리는 대부분 local shard에서 처리되므로 빠르다.
-- 30일 초과 범위를 포함한 쿼리는 archive를 직접 스캔하므로 느릴 수 있다.
-- 기간 조건을 최근 30일 내로 제한하면 archive 스캔 없이 local 경로만 사용된다.
-- 오래된 trace lookup이 필요하면 `otel_traces_hybrid_trace_id_ts`가 archive를 함께 읽는다.
+- logs / traces 쿼리는 전체 기간에 대해 local shard에서 처리되므로 archive JSON 재파싱 비용이 없다.
+- 초기 배포나 schema 재적용 시에는 logs / traces 전체 backfill 때문에 ingest 시간이 더 오래 걸릴 수 있다.
+- metrics / sessions 는 30일 초과 범위를 조회하면 archive 직접 스캔 비용이 남아 있다.
 
-즉, 이 구성은 **최근 데이터는 빠르게**, **오래된 데이터는 원본 보존 우선**으로 설계된 하이브리드 구조다.
+즉, 이 구성은 **logs / traces 는 조회 성능 우선으로 전량 적재**, **metrics / sessions 는 원본 보존 우선 하이브리드**로 분리한 구조다.
 
 ## 로컬 확인
 
@@ -122,11 +121,14 @@ kubectl -n monitoring exec clickhouse-clickhouse-0-0-0 -- clickhouse-client --us
  FROM system.clusters
  WHERE cluster = 'default';
 
- -- 2) 로컬 테이블 TTL(30일) 확인
+ -- 2) logs / traces 테이블이 TTL 없이 유지되는지 확인
  SHOW CREATE TABLE otel_logs_local;
+ SHOW CREATE TABLE otel_traces_local;
 
- -- 3) S3Queue 시작 경계(약 30일 전) 확인
+ -- 3) queue bootstrap 정책 확인
  SHOW CREATE TABLE otel_logs_queue;
+ SHOW CREATE TABLE otel_traces_queue;
+ SHOW CREATE TABLE hyperdx_sessions_queue;
 
  -- 4) 뷰 구성이 기대한 대로 생성됐는지 확인
  SHOW CREATE TABLE otel_logs;
@@ -142,30 +144,25 @@ kubectl -n monitoring exec clickhouse-clickhouse-0-0-0 -- clickhouse-client --us
  -- 6) 아무 shard에서든 전체 데이터가 보이는지 확인
  -- cutoff는 고정값으로 넣어야 샤드별 비교가 정확합니다.
  SELECT
-   countIf(Timestamp < toDateTime64('2026-06-07 03:39:00', 9, 'UTC')) AS logs_hybrid_before_cutoff
+   countIf(Timestamp < toDateTime64('2026-06-07 03:39:00', 9, 'UTC')) AS logs_before_cutoff
  FROM otel_logs;
 
  SELECT
-   countIf(Timestamp < toDateTime64('2026-06-07 03:39:00', 9, 'UTC')) AS traces_recent_before_cutoff
+   countIf(Timestamp < toDateTime64('2026-06-07 03:39:00', 9, 'UTC')) AS traces_before_cutoff
  FROM otel_traces;
 
  SELECT
    countIf(Timestamp < toDateTime64('2026-06-07 03:39:00', 9, 'UTC')) AS traces_hybrid_before_cutoff
  FROM otel_traces_hybrid;
 
- -- 7) 현재 시점에 30일 초과 데이터가 실제로 있는지 확인
- SELECT 'local' AS tier, count() AS rows
+ -- 7) logs / traces 의 30일 초과 데이터가 실제로 로컬에 적재됐는지 확인
+ SELECT 'logs_local' AS tier, count() AS rows
  FROM otel_logs_local
  WHERE Timestamp < now64(9) - INTERVAL 30 DAY
 
  UNION ALL
- SELECT 'hybrid' AS tier, count()
- FROM otel_logs
- WHERE Timestamp < now64(9) - INTERVAL 30 DAY
-
- UNION ALL
- SELECT 'archive' AS tier, count()
- FROM otel_logs_archive
+ SELECT 'traces_local' AS tier, count()
+ FROM otel_traces_local
  WHERE Timestamp < now64(9) - INTERVAL 30 DAY;
 
  -- 8) 현재 적재가 실제로 진행 중인지 대략 확인

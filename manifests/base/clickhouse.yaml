@@ -73,9 +73,6 @@ spec:
             - name: init-sql-config
               mountPath: /scripts/cluster.sql
               subPath: cluster.sql
-            - name: init-sql-config
-              mountPath: /scripts/ingest.sql
-              subPath: ingest.sql
       volumes:
         - name: init-runtime-config
           configMap:

@@ -31,7 +31,7 @@ data:
         isDefault: true
         url: http://clickhouse-clickhouse-0-0-0.clickhouse-clickhouse-headless:8123
         jsonData:
-          host: clickhouse-service
+          host: clickhouse-clickhouse-0-0-0.clickhouse-clickhouse-headless
           port: 8123
           protocol: http
           username: default
