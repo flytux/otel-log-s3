@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - workload-identity.yaml
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: clickhouse-init-runtime-config
+    behavior: replace
+    files:
+      - run.sh
+  - name: clickhouse-init-sql-config
+    files:
+      - cluster.sql
+  - name: otel-collector-config
+    files:
+      - config.yaml=otelcol-config.yaml
+
+patches:
+  - path: clickhouse-workload-identity-patch.yaml
+  - path: otelcol-workload-identity-patch.yaml

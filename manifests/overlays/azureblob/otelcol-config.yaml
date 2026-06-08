@@ -1,0 +1,84 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins:
+            - http://dice.node-01
+            - http://hyperdx.node-01
+          allowed_headers:
+            - "*"
+          max_age: 7200
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'otel-collector-internal'
+          scrape_interval: 10s
+          static_configs:
+            - targets: ['0.0.0.0:8888']
+processors:
+  batch:
+  transform/fix_time:
+    log_statements:
+      - context: log
+        statements:
+          - set(observed_time_unix_nano, time_unix_nano) where observed_time_unix_nano == 0
+          - set(time_unix_nano, Now()) where time_unix_nano == 0
+          - set(observed_time_unix_nano, time_unix_nano) where observed_time_unix_nano == 0
+  filter/session_logs:
+    error_mode: ignore
+    logs:
+      log_record:
+        - resource.attributes["service.name"] == nil
+        - resource.attributes["service.name"] != "dice-web"
+exporters:
+  azureblob/logs:
+    auth:
+      authenticator: azureauth
+    container: otel-logs
+    root_folder: logs
+  azureblob/traces:
+    auth:
+      authenticator: azureauth
+    container: otel-traces
+    root_folder: traces
+  azureblob/metrics:
+    auth:
+      authenticator: azureauth
+    container: otel-metrics
+    root_folder: metrics
+  azureblob/sessions:
+    auth:
+      authenticator: azureauth
+    container: hyperdx-sessions
+    root_folder: sessions
+extensions:
+  azureauth:
+    # Workload Identity를 통해 자동으로 DefaultAzureCredential이 사용됩니다.
+    # AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_FEDERATED_TOKEN_FILE 환경변수는
+    # azure-workload-identity webhook이 자동으로 주입합니다.
+service:
+  extensions: [azureauth]
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [transform/fix_time, batch]
+      exporters: [azureblob/logs]
+    logs/sessions:
+      receivers: [otlp]
+      processors: [transform/fix_time, filter/session_logs, batch]
+      exporters: [azureblob/sessions]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [azureblob/traces]
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [batch]
+      exporters: [azureblob/metrics]

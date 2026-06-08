@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  annotations:
+    azure.workload.identity/client-id: "__AZURE_CLIENT_ID_OTELCOL__"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: clickhouse
+  annotations:
+    azure.workload.identity/client-id: "__AZURE_CLIENT_ID_CLICKHOUSE__"

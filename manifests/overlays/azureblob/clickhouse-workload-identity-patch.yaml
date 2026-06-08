@@ -1,0 +1,9 @@
+apiVersion: clickhouse.com/v1alpha1
+kind: ClickHouseCluster
+metadata:
+  name: clickhouse
+  annotations:
+    azure.workload.identity/use: "true"
+spec:
+  podTemplate:
+    serviceAccountName: clickhouse
