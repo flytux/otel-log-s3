@@ -9,8 +9,10 @@ data:
         <disks>
           <azure_cold>
             <type>azure_blob_storage</type>
-            <storage_account_url>https://__AZURE_STORAGE_ACCOUNT_NAME__.blob.core.windows.net/clickhouse-cold/</storage_account_url>
+            <storage_account_url>https://__AZURE_STORAGE_ACCOUNT_NAME__.blob.core.windows.net</storage_account_url>
             <container_name>clickhouse-cold</container_name>
+            <container_already_exists>true</container_already_exists>
+            <use_workload_identity>true</use_workload_identity>
           </azure_cold>
         </disks>
         <policies>

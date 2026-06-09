@@ -79,8 +79,10 @@ TTL: `toDateTime(Timestamp) + INTERVAL 30 DAY TO VOLUME 'cold'`
 
 ### azureblob 인증
 
-`spec.labels`에 `azure.workload.identity/use: "true"` 설정으로 파드에 Workload Identity가 적용된다.  
-`AZURE_STORAGE_ACCOUNT_NAME` 환경변수를 주입하면 `run.sh`가 `__AZURE_STORAGE_ACCOUNT_NAME__` 플레이스홀더를 치환한다.
+`otel-collector` Deployment와 `ClickHouseCluster`에 `azure.workload.identity/use: "true"` 라벨을 두고, 각 ServiceAccount에 `azure.workload.identity/client-id` annotation을 둬서 Workload Identity webhook이 토큰/환경변수를 주입한다.  
+`__AZURE_CLIENT_ID_OTELCOL__`, `__AZURE_CLIENT_ID_CLICKHOUSE__`, `__AZURE_STORAGE_ACCOUNT_NAME__` 플레이스홀더는 배포 전에 실제 값으로 치환해야 한다.  
+ClickHouse Azure 디스크는 `storage_account_url`에 계정 루트 URL(`https://<account>.blob.core.windows.net`)만 넣고, 컨테이너는 `container_name`으로 별도 지정한다.  
+또 `use_workload_identity: true`를 켜야 ClickHouse가 Managed Identity fallback 대신 Workload Identity credential을 사용하므로, 노드에 여러 user-assigned identity가 있어도 `Multiple user assigned identities exists` 에러를 피할 수 있다.
 
 ## OTel Collector 설정
 
@@ -326,4 +328,3 @@ curl 'http://localhost:8123/?user=default&password=clickhouse' --data 'SELECT ve
 kubectl exec -n monitoring clickhouse-clickhouse-0-0-0 -- \
   clickhouse-client --user default --password clickhouse
 ```
-

@@ -104,24 +104,3 @@ spec:
             sleep 2
           done
           mc mb --ignore-existing local/clickhouse-cold
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: minio-hyperdx-sessions-bootstrap
-spec:
-  template:
-    spec:
-      restartPolicy: OnFailure
-      containers:
-      - name: mc
-        image: minio/mc:latest
-        command:
-        - /bin/sh
-        - -c
-        - |
-          until mc alias set local http://minio-service:9000 minioadmin minioadmin; do
-            echo "waiting for minio..."
-            sleep 2
-          done
-          mc mb --ignore-existing local/hyperdx-sessions

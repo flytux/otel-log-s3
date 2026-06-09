@@ -20,13 +20,9 @@ query_host() {
   clickhouse-client --host "$host" $opts --query "$2"
 }
 
-render_cluster_sql() {
-  sed -e "s#__AZURE_STORAGE_ACCOUNT_NAME__#${AZURE_STORAGE_ACCOUNT_NAME:-}#g" /scripts/cluster.sql
-}
-
 apply_file() {
   host="$1"
-  render_cluster_sql | clickhouse-client --host "$host" $opts --multiquery
+  clickhouse-client --host "$host" $opts --multiquery < /scripts/cluster.sql
 }
 
 echo "Waiting for ClickHouse Keeper..."
