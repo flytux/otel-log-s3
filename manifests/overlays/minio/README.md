@@ -1,5 +1,5 @@
 # OTEL 로그 조회
-
+```
 SELECT
     fromUnixTimestamp64Nano(CAST(log.1, 'Int64')) AS timestamp,
     arrayFirst(x -> x.1 = 'service.name', res.1.1).2.1 AS service_name,
@@ -32,10 +32,10 @@ FROM s3(
 LEFT ARRAY JOIN resourceLogs AS res
 LEFT ARRAY JOIN res.2 AS scope
 LEFT ARRAY JOIN scope.2 AS log;
-
+```
 ----------------------------------------------------------
 # K8S FILE 로그 조회
-
+```
 SELECT 
     -- 1. 로그 발생 타임스탬프 파싱 (나노초 변환)
     fromUnixTimestamp64Nano(CAST(JSONExtractString(line, 'resourceLogs', 1, 'scopeLogs', 1, 'logRecords', 1, 'timeUnixNano'), 'Int64')) AS timestamp,
@@ -57,7 +57,6 @@ FROM s3(
     'JSONAsString',
     'line String' -- 💡 [핵심 교정] s3 함수에 들어올 단일 컬럼 이름과 형식을 명시적으로 선언합니다.
 )
-
-
+```
 ------------------------------------------------------------
 # JournalD 로그 조회
