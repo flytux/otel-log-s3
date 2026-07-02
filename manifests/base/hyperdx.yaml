@@ -23,8 +23,8 @@ kind: ConfigMap
 metadata:
   name: hyperdx-config
 data:
-  HYPERDX_APP_URL: http://hyperdx.node-01
-  FRONTEND_URL: http://hyperdx.node-01
+  HYPERDX_APP_URL: http://hyperdx.local
+  FRONTEND_URL: http://hyperdx.local
   HYPERDX_APP_PORT: "8080"
   HYPERDX_API_PORT: "8000"
   HYPERDX_OPAMP_PORT: "4320"
@@ -169,7 +169,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: hyperdx.node-01
+    - host: hyperdx.local
       http:
         paths:
           - path: /

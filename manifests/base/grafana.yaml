@@ -143,7 +143,7 @@ spec:
                 name: grafana-service
                 port:
                   number: 3000
-    - host: grafana.node-01
+    - host: grafana.local
       http:
         paths:
           - path: /

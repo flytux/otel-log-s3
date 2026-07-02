@@ -73,7 +73,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-  - host: minio.node-01
+  - host: minio.local
     http:
       paths:
       - path: /

@@ -1,5 +1,5 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: DaemonSet
 metadata:
   name: otel-collector
 spec:
@@ -25,3 +25,7 @@ spec:
                 secretKeyRef:
                   name: clickhouse-password
                   key: password
+            - name: AWS_ACCESS_KEY_ID
+              value: minioadmin        
+            - name: AWS_SECRET_ACCESS_KEY
+              value: minioadmin

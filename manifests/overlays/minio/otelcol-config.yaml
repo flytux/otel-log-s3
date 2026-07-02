@@ -19,12 +19,16 @@ receivers:
           scrape_interval: 10s
           static_configs:
             - targets: ['0.0.0.0:8888']
+  filelog/k8s:
+    include:
+      - /var/log/pods/*/*/*.log
+    start_at: end
+    include_file_path: true
+    include_file_name: false
+    operators:
+      - type: container
 processors:
-  # 배치 크기/시간 최적화: ClickHouse INSERT 횟수 줄여 too_many_parts 방지
-  batch:
-    send_batch_size: 10000       # 한 번에 10k 행 묶어서 전송
-    send_batch_max_size: 20000
-    timeout: 5s                  # 최대 5초 대기 후 강제 flush
+  batch: {}
   transform/fix_time:
     log_statements:
       - context: log
@@ -32,18 +36,52 @@ processors:
           - set(observed_time_unix_nano, time_unix_nano) where observed_time_unix_nano == 0
           - set(time_unix_nano, Now()) where time_unix_nano == 0
           - set(observed_time_unix_nano, time_unix_nano) where observed_time_unix_nano == 0
-  # Session Replay 로그만 통과 (HyperDX 브라우저 SDK가 sessionId 속성으로 전송)
   filter/session_only:
     error_mode: ignore
     logs:
       log_record:
         - attributes["sessionId"] == nil
-  # 일반 로그만 통과 (sessionId 없는 것)
   filter/no_session:
     error_mode: ignore
     logs:
       log_record:
         - attributes["sessionId"] != nil
+  k8sattributes:
+    auth_type: "serviceAccount"
+    passthrough: false
+    extract:
+      metadata:
+        - k8s.pod.name
+        - k8s.pod.uid
+        - k8s.namespace.name
+        - k8s.container.name
+        - k8s.node.name
+    pod_association:
+      - sources:
+          - from: resource_attribute
+            name: k8s.pod.name
+          - from: resource_attribute
+            name: k8s.namespace.name
+  transform/k8s:
+    log_statements:
+      - context: log
+        statements:
+          - set(attributes["log_type"], "k8s")
+  resource/k8s:
+    attributes:
+      - key: log_type
+        value: "k8s"
+        action: insert
+  transform/otel:
+    log_statements:
+      - context: log
+        statements:
+          - set(attributes["log_type"], "otel")
+  resource/otel:
+    attributes:
+      - key: log_type
+        value: "otel"
+        action: insert
 exporters:
   clickhouse/otel:
     endpoint: tcp://clickhouse-clickhouse-headless:9000
@@ -81,6 +119,16 @@ exporters:
       enabled: true
       num_consumers: 2
       queue_size: 1000
+  awss3:
+    marshaler: "otlp_json"                
+    s3uploader:                           
+      s3_bucket: "clickhouse-cold"    
+      region: "us-east-1"                 
+      endpoint: "http://minio-service:9000"       
+      s3_force_path_style: true           
+      disable_ssl: true                   
+    resource_attrs_to_s3:
+      s3_prefix: "log_type" 
 service:
   telemetry:
     logs:
@@ -94,14 +142,14 @@ service:
                 host: '0.0.0.0'
                 port: 8888
   pipelines:
-    logs:
+    logs/otel:
       receivers: [otlp]
-      processors: [transform/fix_time, filter/no_session, batch]
-      exporters: [clickhouse/otel]
-    logs/sessions:
-      receivers: [otlp]
-      processors: [transform/fix_time, filter/session_only, batch]
-      exporters: [clickhouse/sessions]
+      processors: [transform/fix_time, filter/no_session, transform/otel, resource/otel, batch]
+      exporters: [clickhouse/otel, awss3]
+    logs/k8s:
+      receivers: [filelog/k8s]
+      processors: [k8sattributes, transform/k8s, resource/k8s] # 메타데이터 주입 후 log_type 세팅
+      exporters: [awss3]    # 이전 답변의 공통 목적지 배치
     traces:
       receivers: [otlp]
       processors: [batch]

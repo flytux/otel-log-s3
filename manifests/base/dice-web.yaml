@@ -306,7 +306,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: dice.node-01
+    - host: dice.local
       http:
         paths:
           - path: /rolldice
