@@ -9,7 +9,7 @@ SELECT
     log.5 AS span_id,
     CAST((arrayMap(x -> x.1, log.6), arrayMap(x -> x.2.1, log.6)), 'Map(String, String)') AS log_attributes
 FROM s3(
-    'http://minio-service:9000/clickhouse-cloud/**/*.json', 
+    'http://minio-service:9000/clickhouse-logs/otel/**/*.json', 
     'minioadmin', 
     'minioadmin', 
     'JSONEachRow',
@@ -51,7 +51,7 @@ SELECT
     -- 4. 로그 레벨 (INFO, WARN, ERROR 등)
     JSONExtractString(line, 'resourceLogs', 1, 'scopeLogs', 1, 'logRecords', 1, 'severityText') AS severity
 FROM s3(
-    'http://minio-service:9000/clickhouse-cold/k8s/**/*.json', 
+    'http://minio-service:9000/clickhouse-logs/k8s/**/*.json', 
     'minioadmin', 
     'minioadmin', 
     'JSONAsString',
