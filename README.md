@@ -1,8 +1,9 @@
-# OTel Collector → ClickHouse → Object Storage (TTL MOVE)
+# OTel Collector → ClickHouse → Minio (TTL MOVE)
 
-OTel Collector가 수신한 logs / traces / metrics / sessions를 **ClickHouse에 직접 기입**한다.  
-ClickHouse는 30일 데이터를 로컬 디스크(hot)에 보관하다가 TTL 만료 또는 디스크 여유 30% 미만 시 Object Storage(cold)로 자동 이관한다.  
-hot/cold 데이터를 **동일 테이블로 투명하게 조회**한다.
+OTel Collector가 수신한 logs / traces / metrics / sessions를 **ClickHouse에 저장** 
+- ClickHouse는 30일 데이터를 로컬 디스크(hot)에 보관
+- TTL 만료 또는 디스크 여유 30% 미만 시 Object Storage(cold)로 이관
+- hot/cold 데이터를 **동일 테이블로 투명하게 조회**
 
 ## 아키텍처
 
@@ -35,8 +36,6 @@ Object Storage (MinIO clickhouse-cold / Azure Blob clickhouse-cold)
 
 ## ClickHouse 테이블 구조
 
-`manifests/base/clickhouse-version.yaml`이 ClickHouse 이미지 버전을 관리하고, overlay별 `cluster.sql`이 스키마를 정의한다.
-
 | 테이블 | 엔진 | 역할 |
 |--------|------|------|
 | `otel_logs_local` | ReplicatedMergeTree | 실제 데이터 저장 (hot→cold 이관) |
@@ -64,38 +63,22 @@ Object Storage (MinIO clickhouse-cold / Azure Blob clickhouse-cold)
 
 TTL: `toDateTime(Timestamp) + INTERVAL 30 DAY TO VOLUME 'cold'`
 
-**이동 조건 (둘 중 먼저 충족되는 것):**
+**이동 조건**
 1. 파티션(일 단위) 내 가장 최신 행의 Timestamp + 30일 경과
 2. 로컬 디스크 여유공간 < 30%
 
-## Overlay별 차이
-
-| | minio | azureblob |
-|---|---|---|
-| cold 디스크 타입 | `s3` | `azure_blob_storage` |
-| cold 버킷 | `clickhouse-cold` (MinIO) | `clickhouse-cold` (Azure) |
-| 인증 | `access_key_id` / `secret_access_key` | Workload Identity (AccountKey 없음) |
-| 추가 리소스 | MinIO Deployment / PVC / 버킷 초기화 Job | — |
-
-### azureblob 인증
-
-`otel-collector` Deployment와 `ClickHouseCluster`에 `azure.workload.identity/use: "true"` 라벨을 두고, 각 ServiceAccount에 `azure.workload.identity/client-id` annotation을 둬서 Workload Identity webhook이 토큰/환경변수를 주입한다.  
-`__AZURE_CLIENT_ID_OTELCOL__`, `__AZURE_CLIENT_ID_CLICKHOUSE__`, `__AZURE_STORAGE_ACCOUNT_NAME__` 플레이스홀더는 배포 전에 실제 값으로 치환해야 한다.  
-ClickHouse Azure 디스크는 `storage_account_url`에 계정 루트 URL(`https://<account>.blob.core.windows.net`)만 넣고, 컨테이너는 `container_name`으로 별도 지정한다.  
-또 `use_workload_identity: true`를 켜야 ClickHouse가 Managed Identity fallback 대신 Workload Identity credential을 사용하므로, 노드에 여러 user-assigned identity가 있어도 `Multiple user assigned identities exists` 에러를 피할 수 있다.
-
 ## OTel Collector 설정
 
-### Session Replay 라우팅
+### Session Replay 라우팅 (Optional 구성)
 
-`LogAttributes["sessionId"]` 속성 유무로 일반 로그와 세션 로그를 분리한다.
+`LogAttributes["sessionId"]` 속성 유무로 일반 로그와 세션 로그를 분리
 
 ```
 로그 (sessionId 없음) → filter/no_session → clickhouse/otel → otel_logs
 로그 (sessionId 있음) → filter/session_only → clickhouse/sessions → hyperdx_sessions
 ```
 
-### 병목 방지 설정
+### Batch 작업 설정
 
 ```yaml
 batch:
@@ -108,7 +91,7 @@ clickhouse/otel:
   max_elapsed_time: 600s   # 장애 시 10분간 재시도
 ```
 
-## 저장 방식별 용량 비교
+## 저장 방식 용량 비교
 
 ### OTel → S3 원본 JSON vs ClickHouse TTL MOVE
 
@@ -122,10 +105,10 @@ clickhouse/otel:
 
 ```
 원본 JSON 추정:  ~4.1 MiB
-ClickHouse ZSTD: ~186 KiB  → 약 22배 차이
+ClickHouse ZSTD: ~186 KiB  → 약 22배
 ```
 
-### 압축률이 높은 이유
+### 압축률 차이
 
 ```
 [원본 JSON - 행 단위]
@@ -161,7 +144,7 @@ GROUP BY table ORDER BY table;
 | OTel 원본 JSON → S3 | ~1,000 GB | 텍스트, 필드명 포함 |
 | ClickHouse TTL MOVE | **~45 GB** | 컬럼형 ZSTD, 약 22배 절감 |
 
-> 압축률은 데이터 특성(반복도, 카디널리티)에 따라 달라지며, 실제 환경에서는 10배~30배 범위에서 나타난다.
+> 압축률은 데이터 특성(반복도, 카디널리티)에 따라 달라지며, 실제 환경에서는 10배~30배 범위 예상
 
 ## 배포
 
