@@ -1,4 +1,7 @@
 # OTEL 로그 조회
+
+### OTEL SDK에서 수집한 로그 조회
+
 ```
 SELECT
     fromUnixTimestamp64Nano(CAST(log.1, 'Int64')) AS timestamp,
@@ -13,7 +16,7 @@ FROM s3(
     'minioadmin', 
     'minioadmin', 
     'JSONEachRow',
-    -- 💡 [핵심] ClickHouse가 타입을 명확히 알 수 있도록 구조(Schema)를 직접 기입합니다.
+    -- Clickhouse Schema 
     'resourceLogs Array(Tuple(
         resource Tuple(attributes Array(Tuple(key String, value Tuple(stringValue String, intValue String)))),
         scopeLogs Array(Tuple(
@@ -34,7 +37,7 @@ LEFT ARRAY JOIN res.2 AS scope
 LEFT ARRAY JOIN scope.2 AS log;
 ```
 ----------------------------------------------------------
-# K8S FILE 로그 조회
+# K8S Container 로그 조회
 ```
 SELECT 
     -- 1. 로그 발생 타임스탬프 파싱 (나노초 변환)
