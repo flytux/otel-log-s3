@@ -103,4 +103,6 @@ spec:
             echo "waiting for minio..."
             sleep 2
           done
+          mc mb --ignore-existing local/clickhouse-logs
           mc mb --ignore-existing local/clickhouse-cold
+          
