@@ -42,7 +42,7 @@ spec:
       serviceAccountName: otel-collector 
       containers:
       - name: otel-collector
-        image: flytux/otelcol-contrib:v0.152
+        image: otelcol:v0.155.0
         env:
         - name: NODE_IP
           valueFrom:
@@ -72,6 +72,9 @@ spec:
           - name: varlibdockercontainers
             mountPath: /var/lib/docker/containers
             readOnly: true
+          - name: journal-volume
+            mountPath: /var/log/journal
+            readOnly: true
       volumes:
         - name: config-volume
           configMap:  
@@ -82,6 +85,10 @@ spec:
         - name: varlibdockercontainers
           hostPath:
             path: /var/lib/docker/containers
+        - name: journal-volume
+          hostPath:
+            path: /var/log/journal/
+            type: Directory
 ---
 apiVersion: v1
 kind: Service
