@@ -19,10 +19,13 @@ receivers:
           scrape_interval: 10s
           static_configs:
             - targets: ['0.0.0.0:8888']
-  filelog/k8s:
+  journald:
+   directory: /var/log/journal
+   start_at: end
+  filelog/container:
     include:
       - /var/log/pods/*/*/*.log
-    start_at: end
+    start_at: beginning
     include_file_path: true
     include_file_name: false
     operators:
@@ -62,26 +65,26 @@ processors:
             name: k8s.pod.name
           - from: resource_attribute
             name: k8s.namespace.name
-  transform/k8s:
+  transform/container:
     log_statements:
       - context: log
         statements:
-          - set(attributes["log_type"], "k8s")
-  resource/k8s:
-    attributes:
-      - key: log_type
-        value: "k8s"
-        action: insert
+          - set(attributes["log_type"], "container")
   transform/otel:
     log_statements:
       - context: log
         statements:
           - set(attributes["log_type"], "otel")
-  resource/otel:
+  transform/journal:
+    log_statements:
+      - context: log
+        statements:
+          - set(attributes["log_type"], "journal")
+  resource/journal:
     attributes:
-      - key: log_type
-        value: "otel"
-        action: insert
+    - key: log_type
+      value: "journal"
+      action: upsert
 exporters:
   clickhouse/otel:
     endpoint: tcp://clickhouse-clickhouse-headless:9000
@@ -129,10 +132,12 @@ exporters:
       disable_ssl: true                   
     resource_attrs_to_s3:
       s3_prefix: "log_type" 
+  debug:
+    verbosity: detailed
 service:
   telemetry:
     logs:
-      level: info
+      level: debug
     metrics:
       level: detailed            # OTel Collector 내부 메트릭 상세 수집
       readers:
@@ -144,12 +149,16 @@ service:
   pipelines:
     logs/otel:
       receivers: [otlp]
-      processors: [transform/fix_time, filter/no_session, transform/otel, resource/otel, batch]
+      processors: [transform/fix_time, filter/no_session, transform/otel, batch]
       exporters: [clickhouse/otel, awss3]
-    logs/k8s:
-      receivers: [filelog/k8s]
-      processors: [k8sattributes, transform/k8s, resource/k8s] # 메타데이터 주입 후 log_type 세팅
+    logs/container:
+      receivers: [filelog/container]
+      processors: [k8sattributes, transform/container] # 메타데이터 주입 후 log_type 세팅
       exporters: [awss3]    # 이전 답변의 공통 목적지 배치
+    logs/journal:
+      receivers: [journald]
+      processors: [k8sattributes, resource/journal, transform/journal] # 메타데이터 주입 후 log_type 세팅
+      exporters: [debug, awss3]    # 이전 답변의 공통 목적지 배치
     traces:
       receivers: [otlp]
       processors: [batch]
